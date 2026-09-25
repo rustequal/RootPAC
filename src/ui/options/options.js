@@ -1,4 +1,4 @@
-import { INCOGNITO_TEXT, download, element, incognitoAllowed, onStored, readLocal, send } from "../shared/rpc.js";
+import { download, element, onStored, readLocal, send } from "../shared/rpc.js";
 import { header } from "../shared/logo.js";
 
 document.getElementById("head").replaceWith(header("User PAC"));
@@ -25,6 +25,11 @@ function renderGutter() {
 function setStatus(message, className = "muted") {
   status.textContent = message;
   status.className = className;
+}
+
+function setBackupStatus(message, className = "muted") {
+  backupStatus.textContent = message;
+  backupStatus.className = className;
 }
 
 function focusPosition(line, column) {
@@ -99,19 +104,15 @@ async function save() {
 document.getElementById("save").addEventListener("click", save);
 cancel.addEventListener("click", () => send({ type: "cancelCheck" }).catch((error) => setStatus(error.message)));
 
-document.getElementById("revert").addEventListener("click", () => {
-  text.value = saved;
-  renderGutter();
-  setStatus("");
-});
+document.getElementById("revert").addEventListener("click", () => load(true));
 
 document.getElementById("export").addEventListener("click", async () => {
   const response = await send({ type: "exportState" }).catch((error) => ({ ok: false, error: error.message }));
   if (!response.ok) {
-    backupStatus.textContent = response.error;
+    setBackupStatus(response.error, "error");
     return;
   }
-  backupStatus.textContent = "";
+  setBackupStatus("");
   download("rootpac-backup.json", JSON.stringify(response.backup, null, 2), "application/json");
 });
 
@@ -122,21 +123,21 @@ file.addEventListener("change", async () => {
   file.value = "";
   if (chosen === undefined) return;
   cancel.hidden = false;
-  backupStatus.textContent = "Checking…";
+  setBackupStatus("Checking…");
   try {
     const backup = JSON.parse(await chosen.text());
     const response = await send({ type: "importState", backup });
     if (response.ok) {
-      backupStatus.textContent = "Imported";
+      setBackupStatus("Imported", "ok");
       await load(true);
     } else if (response.errors !== undefined) {
-      backupStatus.textContent = "";
+      setBackupStatus("The User PAC in the backup has problems, listed above", "error");
       showErrors(response.errors);
     } else {
-      backupStatus.textContent = response.error;
+      setBackupStatus(response.error, "error");
     }
   } catch (error) {
-    backupStatus.textContent = error.message;
+    setBackupStatus(error.message, "error");
   } finally {
     cancel.hidden = true;
   }
@@ -171,6 +172,3 @@ onStored((changes, area) => {
 });
 
 load(true);
-incognitoAllowed().then((allowed) => {
-  if (!allowed) document.getElementById("banners").append(element("p", "banner", INCOGNITO_TEXT));
-}, () => undefined);

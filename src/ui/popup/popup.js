@@ -57,7 +57,7 @@ function showState(state, tabId) {
 async function render() {
   const [stored, session, incognito, tabId] = await Promise.all([
     readLocal(["enabled", "userPac", "appliedPac", "userPacErrors"]),
-    chrome.storage.session.get(["lastProxyError", "lastLearnError", "armed", "startupError"]),
+    chrome.storage.session.get(["lastLearnError", "armed", "startupError"]),
     incognitoAllowed(),
     activeTabId(),
   ]);
@@ -76,9 +76,10 @@ async function render() {
   if (session.startupError !== undefined) banner(`RootPAC failed to start: ${session.startupError}`, "banner error");
   const learnError = session.lastLearnError;
   if (learnError !== undefined) banner(`${formatTime(learnError.time)} — Learning failed: ${learnError.message}`, "banner error");
-  const error = session.lastProxyError;
-  if (error !== undefined && error !== null) {
-    banner(`${formatTime(error.time)} — ${proxyErrorText(error, stored.appliedPac, stored.userPac)}`, "banner error");
+  const error = state?.ok ? state.proxyError : null;
+  if (error !== null && error !== undefined) {
+    const failed = error.count > 1 ? ` (${error.count} requests failed on this page)` : "";
+    banner(`${formatTime(error.time)} — ${proxyErrorText(error, stored.appliedPac, stored.userPac)}${failed}`, "banner error");
   }
 }
 

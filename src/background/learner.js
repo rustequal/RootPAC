@@ -7,11 +7,15 @@ import { reportEndpointHosts } from "../core/reporting.js";
 const MAX_LOADED = 500;
 const MAX_TRACKED = 2000;
 const BLOCKED = "net::ERR_BLOCKED_BY_CLIENT";
+const PROXY_FAILURE = /^net::ERR_(?:PROXY_|SOCKS_|TUNNEL_|MANDATORY_PROXY_|PAC_|HTTPS_PROXY_|UNEXPECTED_PROXY_)/;
+const MANDATORY = "net::ERR_MANDATORY_PROXY_CONFIGURATION_FAILED";
+const PAC_FAILED = "net::ERR_PAC_SCRIPT_FAILED";
+const PAC_HINT_MS = 1000;
 const TAB = "tab:";
 
 const IGNORED_LIFECYCLES = new Set(["prerender", "cached", "pending_deletion"]);
 
-const blankTab = (host) => ({ host, navigation: 0, newHosts: 0, loaded: new Set(), proxied: new Set(), loading: false, incomplete: false });
+const blankTab = (host) => ({ host, navigation: 0, newHosts: 0, loaded: new Set(), proxied: new Set(), loading: false, incomplete: false, proxyError: null });
 
 export function createLearner({ store, engine, session, tabs: browserTabs, now }) {
   const tabs = new Map();
@@ -24,6 +28,8 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now }
   let failed = false;
   const dirty = new Set();
   let writing = false;
+  let pacFailure = null;
+  const awaitingPac = new Map();
 
   const indexOf = (groups) => {
     if (indexed.groups !== groups) indexed = { groups, index: hostIndex(groups) };
@@ -91,6 +97,24 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now }
     if (tab.incomplete) return;
     tab.incomplete = true;
     changed(tabId);
+  };
+
+  // The first proxy failure of a load is kept, later ones are counted. chrome.proxy.onProxyError carries the PAC line
+  // but no tab, and webRequest reports the same failure for the tab just before or just after it.
+  const recentPac = () => (pacFailure !== null && now() - pacFailure.time <= PAC_HINT_MS ? pacFailure : null);
+
+  const failProxy = (entry, details) => {
+    if (entry.main) resetTab(entry.tabId, entry.url);
+    else if (!current(entry.tabId, entry.navigation)) return;
+    const tab = tabs.get(entry.tabId);
+    if (tab.proxyError !== null && tab.proxyError !== undefined) {
+      tab.proxyError = { ...tab.proxyError, count: tab.proxyError.count + 1 };
+    } else {
+      const pac = details.error === MANDATORY ? recentPac() : null;
+      tab.proxyError = { time: details.timeStamp, error: pac?.error ?? details.error, details: pac?.details ?? "", count: 1 };
+      if (details.error === MANDATORY && pac === null) awaitingPac.set(entry.tabId, { navigation: tab.navigation, time: now() });
+    }
+    changed(entry.tabId);
   };
 
   const track = (details, entry) => {
@@ -240,6 +264,8 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now }
 
     incomplete: (tabId) => tabs.get(tabId)?.incomplete ?? false,
 
+    proxyError: (tabId) => tabs.get(tabId)?.proxyError ?? null,
+
     pending: (tabId) => [...pending.values()].filter((source) => source.tabId === tabId).length,
 
     onCompleted(tabId, url) {
@@ -326,8 +352,24 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now }
       markLoaded(entry.tabId, entry.host, entry.via === "proxy");
     },
 
+    onProxyError({ error, details }) {
+      if (error !== PAC_FAILED) return;
+      pacFailure = { time: now(), error, details: details ?? "" };
+      for (const [tabId, awaiting] of awaitingPac) {
+        awaitingPac.delete(tabId);
+        const tab = tabs.get(tabId);
+        if (tab?.navigation !== awaiting.navigation || tab.proxyError?.error !== MANDATORY || pacFailure.time - awaiting.time > PAC_HINT_MS) continue;
+        tab.proxyError = { ...tab.proxyError, error, details: pacFailure.details };
+        changed(tabId);
+      }
+    },
+
     onError(details) {
       const entry = settled(details);
+      if (entry !== null && PROXY_FAILURE.test(details.error ?? "")) {
+        failProxy(entry, details);
+        return;
+      }
       if (entry === null || details.error !== BLOCKED || !engine.blockedBeforeOpen(entry.time)) return;
       if (entry.main) {
         resetTab(entry.tabId, entry.url);
@@ -352,6 +394,7 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now }
     },
 
     onRemoved(tabId) {
+      awaitingPac.delete(tabId);
       if (tabs.delete(tabId)) saveTab(tabId);
     },
   };

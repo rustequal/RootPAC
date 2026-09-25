@@ -13,7 +13,7 @@ import { fixture, loadPac, vmChecker, PSL } from "./support.js";
 const TAB = 7;
 const NO_TABS = { query: async () => [] };
 
-async function setup({ session = new FakeArea(), enabled = true } = {}) {
+async function setup({ session = new FakeArea(), enabled = true, now = null } = {}) {
   const area = new FakeArea();
   const store = new Store(area, new FakeArea());
   await store.load(PSL);
@@ -23,7 +23,7 @@ async function setup({ session = new FakeArea(), enabled = true } = {}) {
   await commands.dispatch({ type: "saveUserPac", text: fixture("user.pac") });
   if (!enabled) await commands.dispatch({ type: "setEnabled", enabled: false });
   let time = 1000;
-  const learner = createLearner({ store, engine, session, tabs: NO_TABS, now: () => time++ });
+  const learner = createLearner({ store, engine, session, tabs: NO_TABS, now: now ?? (() => time++) });
   await learner.restore();
   browser.journal.clear();
   area.calls.length = 0;
@@ -41,7 +41,7 @@ const navigate = (learner, url, tabId = TAB, extra = {}) => {
   learner.onCommitted({ tabId, frameId: 0, url, documentLifecycle });
 };
 
-const tabRecord = (fields) => ({ host: null, navigation: 0, newHosts: 0, loaded: [], proxied: [], loading: false, incomplete: false, ...fields });
+const tabRecord = (fields) => ({ host: null, navigation: 0, newHosts: 0, loaded: [], proxied: [], loading: false, incomplete: false, proxyError: null, ...fields });
 const storedTabs = async (session) =>
   Object.fromEntries(Object.entries(await session.get(null)).flatMap(([key, value]) => (key.startsWith("tab:") ? [[key.slice(4), value]] : [])));
 const storedTab = async (session, tabId) => (await storedTabs(session))[tabId];
@@ -582,4 +582,84 @@ test("a host and its subdomain in one batch give one record, so one branch never
   request(learner, "https://x.localhost/c.js");
   await settled(learner);
   assert.deepEqual(Object.keys(learned(area).hosts).sort(), ["cdn.e.com", "first.example.org"]);
+});
+
+const fails = (learner, url, error, extra) => learner.onError({ ...request(learner, url, extra), error });
+
+test("the first proxy failure of a load is shown for the tab it happened in, counted, and gone after the next navigation of the tab it happened in and is gone after the next navigation", async () => {
+  const session = new FakeArea();
+  const { learner } = await setup({ session });
+  navigate(learner, "https://www.instagram.com/");
+  fails(learner, "https://i.instagram.com/api", "net::ERR_PROXY_CONNECTION_FAILED", { timeStamp: 50 });
+  fails(learner, "https://i.instagram.com/api", "net::ERR_TUNNEL_CONNECTION_FAILED", { timeStamp: 60 });
+  fails(learner, "https://i.instagram.com/api", "net::ERR_FAILED", { timeStamp: 70 });
+  fails(learner, "https://i.instagram.com/api", "net::ERR_PROXY_CONNECTION_FAILED", { tabId: TAB + 1 });
+  await settled(learner);
+  const failure = { time: 50, error: "net::ERR_PROXY_CONNECTION_FAILED", details: "", count: 2 };
+  assert.deepEqual(learner.proxyError(TAB), failure);
+  assert.equal(learner.proxyError(TAB + 1), null);
+  assert.deepEqual((await storedTab(session, TAB)).proxyError, failure);
+  navigate(learner, "https://www.instagram.com/");
+  loads(learner, "https://i.instagram.com/api");
+  await settled(learner);
+  assert.equal(learner.proxyError(TAB), null);
+  assert.equal((await storedTab(session, TAB)).proxyError, null);
+});
+
+test("a failed request of an earlier load does not mark the current one", async () => {
+  const { learner } = await setup();
+  navigate(learner, "https://www.instagram.com/");
+  const late = request(learner, "https://i.instagram.com/api");
+  navigate(learner, "https://www.instagram.com/");
+  learner.onError({ ...late, error: "net::ERR_PROXY_CONNECTION_FAILED" });
+  assert.equal(learner.proxyError(TAB), null);
+});
+
+test("a root document the proxy failed to load starts a new load with the failure, and a successful reload clears it", async () => {
+  const { learner } = await setup();
+  navigate(learner, "https://www.instagram.com/");
+  loads(learner, "https://i.instagram.com/api");
+  const details = { requestId: "main-proxy", type: "main_frame", tabId: TAB, url: "https://www.instagram.com/", documentLifecycle: "active", timeStamp: 80 };
+  learner.onRequest(details);
+  learner.onError({ ...details, error: "net::ERR_PROXY_CONNECTION_FAILED" });
+  assert.deepEqual(learner.proxyError(TAB), { time: 80, error: "net::ERR_PROXY_CONNECTION_FAILED", details: "", count: 1 });
+  assert.equal(learner.loaded(TAB), 0);
+  assert.equal(learner.tabHost(TAB), "www.instagram.com");
+  navigate(learner, "https://www.instagram.com/");
+  assert.equal(learner.proxyError(TAB), null);
+});
+
+test("a PAC failure carries the line Chrome reported just before the request failed", async () => {
+  const { learner } = await setup();
+  navigate(learner, "https://www.instagram.com/");
+  learner.onProxyError({ error: "net::ERR_TUNNEL_CONNECTION_FAILED", details: "", fatal: true });
+  learner.onProxyError({ error: "net::ERR_PAC_SCRIPT_FAILED", details: "line: 12: Uncaught Error: x", fatal: false });
+  fails(learner, "https://i.instagram.com/api", "net::ERR_MANDATORY_PROXY_CONFIGURATION_FAILED", { timeStamp: 90 });
+  assert.deepEqual(learner.proxyError(TAB), { time: 90, error: "net::ERR_PAC_SCRIPT_FAILED", details: "line: 12: Uncaught Error: x", count: 1 });
+});
+
+test("a PAC failure reported long before the request failed is not attached to it", async () => {
+  const clock = { time: 1000 };
+  const { learner } = await setup({ now: () => clock.time });
+  navigate(learner, "https://www.instagram.com/");
+  learner.onProxyError({ error: "net::ERR_PAC_SCRIPT_FAILED", details: "line: 12: Uncaught Error: x", fatal: false });
+  clock.time += 1001;
+  fails(learner, "https://i.instagram.com/api", "net::ERR_MANDATORY_PROXY_CONFIGURATION_FAILED", { timeStamp: 95 });
+  assert.deepEqual(learner.proxyError(TAB), { time: 95, error: "net::ERR_MANDATORY_PROXY_CONFIGURATION_FAILED", details: "", count: 1 });
+});
+
+test("a PAC failure reported just after the root document failed is attached to it", async () => {
+  const clock = { time: 1000 };
+  const { learner } = await setup({ now: () => clock.time });
+  const details = { requestId: "main-pac", type: "main_frame", tabId: TAB, url: "https://www.instagram.com/", documentLifecycle: "active", timeStamp: 97 };
+  learner.onRequest(details);
+  learner.onError({ ...details, error: "net::ERR_MANDATORY_PROXY_CONFIGURATION_FAILED" });
+  learner.onProxyError({ error: "net::ERR_PAC_SCRIPT_FAILED", details: "line: 12: Uncaught Error: x", fatal: false });
+  assert.deepEqual(learner.proxyError(TAB), { time: 97, error: "net::ERR_PAC_SCRIPT_FAILED", details: "line: 12: Uncaught Error: x", count: 1 });
+  navigate(learner, "https://www.instagram.com/");
+  clock.time += 1001;
+  fails(learner, "https://i.instagram.com/api", "net::ERR_MANDATORY_PROXY_CONFIGURATION_FAILED", { timeStamp: 98 });
+  clock.time += 1001;
+  learner.onProxyError({ error: "net::ERR_PAC_SCRIPT_FAILED", details: "line: 13: Uncaught Error: y", fatal: false });
+  assert.deepEqual(learner.proxyError(TAB), { time: 98, error: "net::ERR_MANDATORY_PROXY_CONFIGURATION_FAILED", details: "", count: 1 });
 });

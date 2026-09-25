@@ -20,7 +20,7 @@ function requireValidUserPac(state) {
 }
 
 
-export function createCommands({ store, engine, checker, session, learner }) {
+export function createCommands({ store, engine, checker, learner }) {
   const normalize = (groups, seen, analysis) => {
     const adopted = adoptLegacyGroups(groups, seen, analysis.roots);
     const reconciled = reconcileGroups(adopted.groups, analysis);
@@ -37,11 +37,6 @@ export function createCommands({ store, engine, checker, session, learner }) {
     return trialErrors(outcome, { systemPac, userPac, shifts });
   };
 
-  const committed = async (result) => {
-    await session.remove(["lastProxyError"]);
-    return result;
-  };
-
   const saveUserPac = async ({ text }) => {
     requireString(text, "text");
     const result = analyzeUserPac(text);
@@ -53,13 +48,13 @@ export function createCommands({ store, engine, checker, session, learner }) {
       const { groups, seen } = normalize(state.groups, state.seen, analysis);
       const next = rebuild({ ...state, userPac: text, analysis, userPacErrors: null }, groups, seen);
       const control = await engine.commit(next);
-      return committed({ ok: true, errors: [], analysis, control });
+      return { ok: true, errors: [], analysis, control };
     });
   };
 
   const setEnabled = async ({ enabled }) => {
     if (typeof enabled !== "boolean") throw new TypeError("enabled must be a boolean");
-    return store.run(async (state) => committed({ ok: true, control: await engine.commit({ ...state, enabled }) }));
+    return store.run(async (state) => ({ ok: true, control: await engine.commit({ ...state, enabled }) }));
   };
 
   const removeHost = async ({ mask, host }) => {
@@ -97,7 +92,7 @@ export function createCommands({ store, engine, checker, session, learner }) {
     return store.run(async (state) => {
       const next = rebuild({ ...state, userPac, analysis, userPacErrors: null }, groups, {});
       const control = await engine.commit(next);
-      return committed({ ok: true, errors: [], analysis, control });
+      return { ok: true, errors: [], analysis, control };
     });
   };
 
@@ -118,6 +113,7 @@ export function createCommands({ store, engine, checker, session, learner }) {
       proxied: learner.proxied(tabId),
       newHosts: learner.newHosts(tabId),
       incomplete: learner.incomplete(tabId),
+      proxyError: learner.proxyError(tabId),
     };
   };
 

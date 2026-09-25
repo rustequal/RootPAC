@@ -5,7 +5,7 @@ import { createDnr } from "./dnr.js";
 import { createEngine } from "./engine.js";
 import { createLearner } from "./learner.js";
 import { createCommands } from "./messages.js";
-import { createProxy, proxyErrorRecord } from "./proxy.js";
+import { createProxy } from "./proxy.js";
 import { Store } from "./store.js";
 
 const store = new Store(chrome.storage.local, chrome.storage.session);
@@ -34,7 +34,6 @@ const commands = createCommands({
   store,
   engine,
   checker: createChecker({ offscreen: chrome.offscreen, runtime: chrome.runtime }),
-  session: chrome.storage.session,
   learner,
 });
 const ready = fetch(chrome.runtime.getURL("vendor/public_suffix_list.dat"))
@@ -121,9 +120,7 @@ for (const setting of [chrome.proxy.settings, chrome.privacy.network.networkPred
   );
 }
 
-chrome.proxy.onProxyError.addListener((details) => {
-  chrome.storage.session.set({ lastProxyError: proxyErrorRecord(details, Date.now()) }).catch(ignore);
-});
+chrome.proxy.onProxyError.addListener(whenReady(learner.onProxyError));
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (sender.id !== chrome.runtime.id) return false;

@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createBadge } from "../src/background/badge.js";
 
-function fakes({ state = STATE, tabs: hosts = { 1: "www.a.com" }, newHosts = {}, load = { 1: 2 }, busy = [], waiting = {}, broken = [], armed = true, failIcon = 0 } = {}) {
+function fakes({ state = STATE, tabs: hosts = { 1: "www.a.com" }, newHosts = {}, load = { 1: 2 }, busy = [], waiting = {}, broken = [], failed = [], armed = true, failIcon = 0 } = {}) {
   const calls = [];
   const decoded = [];
   const runtime = { lastError: undefined };
@@ -33,6 +33,7 @@ function fakes({ state = STATE, tabs: hosts = { 1: "www.a.com" }, newHosts = {},
       loading: (tabId) => busy.includes(tabId),
       pending: (tabId) => waiting[tabId] ?? 0,
       incomplete: (tabId) => broken.includes(tabId),
+      proxyError: (tabId) => (failed.includes(tabId) ? { error: "net::ERR_PROXY_CONNECTION_FAILED", count: 1 } : null),
     },
     decode: async (path) => {
       decoded.push(path);
@@ -64,6 +65,15 @@ test("new hosts in the tab turn the icon amber and keep the count", async () => 
   const { badge, calls } = fakes({ newHosts: { 1: 3 } });
   await badge.refresh();
   assert.deepEqual(calls.slice(2), [["icon", 1, "pending-16"], ["text", 1, "2"]]);
+});
+
+test("a proxy failure in the current load turns the icon amber with an exclamation mark instead of the count", async () => {
+  const { badge, calls } = fakes({ failed: [1], busy: [1], newHosts: { 1: 3 } });
+  await badge.refresh();
+  assert.deepEqual(calls.slice(2), [["icon", 1, "pending-16"], ["text", 1, "!"]]);
+  const off = fakes({ failed: [1], armed: false });
+  await off.badge.refresh();
+  assert.deepEqual(off.calls.slice(0, 2), [["icon", undefined, "off-16"], ["text", undefined, "!"]]);
 });
 
 test("a loading page is neutral until its verdict is known, so a new site never flashes green", async () => {

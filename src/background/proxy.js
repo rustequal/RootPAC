@@ -52,7 +52,3 @@ export function createProxy({ proxy, privacy, extension }) {
     },
   };
 }
-
-export function proxyErrorRecord({ error, details, fatal }, time) {
-  return { time, error, details, fatal };
-}

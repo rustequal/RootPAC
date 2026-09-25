@@ -1,4 +1,4 @@
-import { download, element, formatTime, onStored, proxyErrorText, readLocal, readSession, send } from "../shared/rpc.js";
+import { download, element, formatTime, onStored, readLocal, send } from "../shared/rpc.js";
 import { header } from "../shared/logo.js";
 
 document.getElementById("head").replaceWith(header("System PAC"));
@@ -86,7 +86,6 @@ function renderGroups() {
 
 async function render() {
   const stored = await readLocal(null);
-  const session = await readSession("lastProxyError");
   state = {
     appliedPac: stored.appliedPac ?? "",
     userPac: stored.userPac,
@@ -94,11 +93,7 @@ async function render() {
     seen: new Map(Object.entries(stored).filter(([key]) => key.startsWith("seen:")).map(([key, value]) => [key.slice(5), value])),
   };
   pac.textContent = state.appliedPac === "" ? "—" : state.appliedPac;
-  const error = session.lastProxyError;
   errorBox.replaceChildren();
-  if (error !== undefined && error !== null) {
-    showMessage(`${formatTime(error.time)} — ${proxyErrorText(error, state.appliedPac, state.userPac)}`);
-  }
   renderGroups();
 }
 
@@ -111,7 +106,7 @@ document.getElementById("copy").addEventListener("click", async () => {
 document.getElementById("download").addEventListener("click", () => download("rootpac.pac", state.appliedPac, "application/x-ns-proxy-autoconfig"));
 filter.addEventListener("input", renderGroups);
 let refresh = 0;
-const VIEWED = new Set(["appliedPac", "userPac", "analysis", "lastProxyError"]);
+const VIEWED = new Set(["appliedPac", "userPac", "analysis"]);
 
 onStored((changes) => {
   if (!Object.keys(changes).some((key) => VIEWED.has(key) || key.startsWith("group:") || key.startsWith("seen:"))) return;

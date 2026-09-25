@@ -22,6 +22,10 @@ const fakeLearner = () => ({
   load: new Map(),
   via: new Map(),
   broken: new Set(),
+  failures: new Map(),
+  proxyError(tabId) {
+    return this.failures.get(tabId) ?? null;
+  },
   incomplete(tabId) {
     return this.broken.has(tabId);
   },
@@ -273,18 +277,6 @@ test("a cancelled trial run reports it and changes nothing", async () => {
   assert.deepEqual(await commands.dispatch({ type: "cancelCheck" }), { ok: true, cancelled: true });
 });
 
-test("successful configuration changes clear lastProxyError", async () => {
-  const session = new FakeArea({ lastProxyError: { time: 1, error: "net::ERR_PAC_SCRIPT_FAILED", details: "line: 1: x", fatal: false } });
-  const { commands } = await setup({}, { session });
-  await commands.dispatch({ type: "saveUserPac", text: "var root;" });
-  assert.equal(Object.hasOwn(session.items, "lastProxyError"), true);
-  await commands.dispatch({ type: "saveUserPac", text: fixture("user.pac") });
-  assert.equal(Object.hasOwn(session.items, "lastProxyError"), false);
-  session.items.lastProxyError = { time: 2 };
-  await commands.dispatch({ type: "setEnabled", enabled: true });
-  assert.equal(Object.hasOwn(session.items, "lastProxyError"), false);
-});
-
 test("safe mode keeps protection, pauses edits and is left by a valid save", async () => {
   const invalid = TRAINED.userPac.replace('"old.com"', '"Old.com"');
   const applied = buildSystemPac(TRAINED.userPac, {
@@ -366,6 +358,7 @@ test("getTabState reports the root, its group and the new hosts of a tab", async
   learner.load.set(7, 9);
   learner.via.set(7, 5);
   learner.broken.add(7);
+  learner.failures.set(7, { time: 5, error: "net::ERR_PROXY_CONNECTION_FAILED", details: "", count: 2 });
   assert.deepEqual(await commands.dispatch({ type: "getTabState", tabId: 7 }), {
     ok: true,
     mask: "a.com",
@@ -375,15 +368,16 @@ test("getTabState reports the root, its group and the new hosts of a tab", async
     proxied: 5,
     newHosts: 2,
     incomplete: true,
+    proxyError: { time: 5, error: "net::ERR_PROXY_CONNECTION_FAILED", details: "", count: 2 },
   });
   learner.tabs.set(8, "example.org");
-  assert.deepEqual(await commands.dispatch({ type: "getTabState", tabId: 8 }), { ok: true, mask: null, rootHost: null, hostCount: 0, loaded: 0, proxied: 0, newHosts: 0, incomplete: false });
-  assert.deepEqual(await commands.dispatch({ type: "getTabState", tabId: 9 }), { ok: true, mask: null, rootHost: null, hostCount: 0, loaded: 0, proxied: 0, newHosts: 0, incomplete: false });
+  assert.deepEqual(await commands.dispatch({ type: "getTabState", tabId: 8 }), { ok: true, mask: null, rootHost: null, hostCount: 0, loaded: 0, proxied: 0, newHosts: 0, incomplete: false, proxyError: null });
+  assert.deepEqual(await commands.dispatch({ type: "getTabState", tabId: 9 }), { ok: true, mask: null, rootHost: null, hostCount: 0, loaded: 0, proxied: 0, newHosts: 0, incomplete: false, proxyError: null });
   assert.deepEqual(await commands.dispatch({ type: "getTabState", tabId: "7" }), { ok: false, error: "tabId must be an integer" });
 });
 
 test("getTabState works before a User PAC is saved", async () => {
   const { commands, learner } = await setup();
   learner.tabs.set(1, "www.a.com");
-  assert.deepEqual(await commands.dispatch({ type: "getTabState", tabId: 1 }), { ok: true, mask: null, rootHost: null, hostCount: 0, loaded: 0, proxied: 0, newHosts: 0, incomplete: false });
+  assert.deepEqual(await commands.dispatch({ type: "getTabState", tabId: 1 }), { ok: true, mask: null, rootHost: null, hostCount: 0, loaded: 0, proxied: 0, newHosts: 0, incomplete: false, proxyError: null });
 });

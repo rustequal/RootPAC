@@ -139,6 +139,19 @@ button.small {
   font-size: 14px;
 }
 
+.messages:not(:empty) {
+  margin-bottom: 14px;
+}
+
+.messages > .banner:first-child {
+  margin-top: 0;
+}
+
+p.error,
+span.error {
+  color: var(--error);
+}
+
 .banner.error {
   background: var(--error-bg);
   color: var(--error);

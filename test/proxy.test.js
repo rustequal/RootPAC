@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createProxy, proxyErrorRecord } from "../src/background/proxy.js";
+import { createProxy } from "../src/background/proxy.js";
 import { FakeBrowser } from "./fakes.js";
 
 test("apply sets the privacy settings before the mandatory PAC", async () => {
@@ -54,15 +54,6 @@ test("control reports settings owned by someone else", async () => {
     assert.equal(controllable, false);
     assert.deepEqual(Object.values(levels), [level, level, level]);
   }
-});
-
-test("proxy errors are recorded with their time", () => {
-  assert.deepEqual(proxyErrorRecord({ error: "net::ERR_PAC_SCRIPT_FAILED", details: "line: 3", fatal: false }, 42), {
-    time: 42,
-    error: "net::ERR_PAC_SCRIPT_FAILED",
-    details: "line: 3",
-    fatal: false,
-  });
 });
 
 test("with incognito access the incognito values must hold the same conditions", async () => {
