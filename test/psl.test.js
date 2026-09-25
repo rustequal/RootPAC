@@ -34,7 +34,7 @@ test("registrable domains respect ICANN and private suffixes", () => {
 });
 
 test("rules are read up to whitespace, comments are skipped and IDN rules become punycode", () => {
-  const psl = parsePublicSuffixList("// comment\nuk extra\nco.uk\n*.ck\n!www.ck\nрф\n");
+  const psl = parsePublicSuffixList("// comment\nuk extra\nco.uk\n*.ck\n!www.ck\n\u0440\u0444\n");
   assert.equal(psl.registrableDomain("a.b.co.uk"), "b.co.uk");
   assert.equal(psl.registrableDomain("a.b.ck"), "a.b.ck");
   assert.equal(psl.registrableDomain("a.www.ck"), "www.ck");

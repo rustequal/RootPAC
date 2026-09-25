@@ -10,7 +10,7 @@ test("hostFromUrl normalizes the hostname", () => {
   assert.equal(hostFromUrl("wss://edge-chat.facebook.com/chat"), "edge-chat.facebook.com");
   assert.equal(hostFromUrl("ws://a.example.com/"), "a.example.com");
   assert.equal(hostFromUrl("https://www.instagram.com"), "www.instagram.com");
-  assert.equal(hostFromUrl("https://ЯНДЕКС.рф/"), "xn--d1acpjx3f.xn--p1ai");
+  assert.equal(hostFromUrl("https://\u042F\u041D\u0414\u0415\u041A\u0421.\u0440\u0444/"), "xn--d1acpjx3f.xn--p1ai");
 });
 
 test("hostFromUrl canonicalizes IP literals", () => {
