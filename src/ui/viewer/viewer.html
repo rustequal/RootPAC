@@ -1,0 +1,19 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>RootPAC — System PAC</title>
+<link rel="stylesheet" href="../shared/ui.css">
+<body style="max-width: 1040px; margin: 0 auto">
+<div id="head"></div>
+<div id="error"></div>
+<div class="row">
+  <button id="copy">Copy</button>
+  <button id="download">Download</button>
+  <span id="status" class="muted"></span>
+</div>
+<pre id="pac" class="code" style="max-height: 340px; margin-top: 10px">—</pre>
+<h2>Learned groups</h2>
+<input id="filter" type="search" placeholder="Filter hosts">
+<div id="groups"></div>
+<p><a id="options" href="../options/options.html" target="_blank">User PAC editor</a></p>
+<script type="module" src="viewer.js"></script>
+</body>

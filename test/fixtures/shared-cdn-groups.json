@@ -1,0 +1,32 @@
+{
+  "source": "customer export 2026-09-24, groups facebook.com, instagram.com, threads.com",
+  "groups": {
+    "facebook.com": {
+      "rootHost": "www.facebook.com",
+      "hosts": {
+        "scontent.frix7-1.fna.fbcdn.net": 1790194809823,
+        "scontent.xx.fbcdn.net": 1790194810496,
+        "static.xx.fbcdn.net": 1790194708272,
+        "www.fbsbx.com": 1790194810509
+      }
+    },
+    "instagram.com": {
+      "rootHost": "www.instagram.com",
+      "hosts": {
+        "instagram.frix7-1.fna.fbcdn.net": 1790194698849,
+        "static.cdninstagram.com": 1790194698520,
+        "instagram.fist1-3.fna.fbcdn.net": 1790265190981,
+        "scontent-lhr6-1.cdninstagram.com": 1790265203868,
+        "scontent-cdg4-1.cdninstagram.com": 1790265215612,
+        "instagram.fcai19-5.fna.fbcdn.net": 1790265225519
+      }
+    },
+    "threads.com": {
+      "rootHost": "www.threads.com",
+      "hosts": {
+        "giphy.com": 1790194884046,
+        "scontent.cdninstagram.com": 1790194875160
+      }
+    }
+  }
+}

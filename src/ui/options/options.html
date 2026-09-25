@@ -1,0 +1,29 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>RootPAC — Options</title>
+<link rel="stylesheet" href="../shared/ui.css">
+<body style="max-width: 960px; margin: 0 auto">
+<div id="head"></div>
+<div id="banners"></div>
+<div class="editor">
+  <pre id="gutter" class="gutter">1</pre>
+  <textarea id="text" rows="22" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea>
+</div>
+<div class="row" style="margin-top: 10px">
+  <button id="save" class="primary">Save</button>
+  <button id="revert">Revert</button>
+  <button id="cancel" hidden>Cancel</button>
+  <span id="status" class="muted"></span>
+</div>
+<div id="result"></div>
+<h2>Backup</h2>
+<div class="row">
+  <button id="export">Export</button>
+  <button id="import">Import</button>
+  <input id="file" type="file" accept="application/json" hidden>
+  <span id="backupStatus" class="muted"></span>
+</div>
+<p class="muted">Ctrl+S saves. Tab inserts two spaces. Turning the proxy off is done from chrome://extensions.</p>
+<p><a id="viewer" href="../viewer/viewer.html" target="_blank">System PAC viewer</a></p>
+<script type="module" src="options.js"></script>
+</body>
