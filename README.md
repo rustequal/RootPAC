@@ -1,23 +1,24 @@
 # RootPAC
 
 [![test](https://github.com/rustequal/RootPAC/actions/workflows/test.yml/badge.svg)](https://github.com/rustequal/RootPAC/actions/workflows/test.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Расширение Chrome (Manifest V3), которое пускает через прокси сайт целиком — вместе со всеми сторонними хостами, которые загружают его страницы: CDN, API, видео, шрифты, счётчики.
+A Chrome extension (Manifest V3) that routes a whole site through your proxy — together with every third-party host its pages load: CDNs, APIs, video, fonts, analytics.
 
-Обычный PAC-файл знает только те домены, которые вы в него вписали. Сайт при этом тянет десятки чужих имён, и они уходят напрямую — с вашим реальным IP. RootPAC закрывает эту дыру: вы объявляете сайт **корнем**, а расширение само выучивает всё, что он загружает, и достраивает из вашего PAC итоговый **System PAC**.
+A regular PAC file only knows the domains you put in it. A site, however, pulls in dozens of other names, and those go out directly — with your real IP. RootPAC closes that gap: you declare a site a **root**, and the extension learns everything it loads and builds a **System PAC** on top of your own PAC.
 
-Главная гарантия: ни один запрос из контекста корня не уходит на целевой сервер напрямую. Хост, который расширение ещё не знает, блокируется до перезагрузки страницы, а к следующей загрузке он уже выучен и идёт через прокси.
+The core guarantee: no request from a root's context reaches the target server directly. A host the extension does not know yet is blocked until the page is reloaded; by the next load it has been learned and goes through the proxy.
 
-## Как это работает
+## How it works
 
-1. Вы пишете обычный PAC-файл — **User PAC** — и помечаете в нём нужные сайты директивой `root()`.
-2. Когда страница корня запрашивает незнакомый хост, запрос блокируется (`declarativeNetRequest`), а хост записывается в группу этого корня.
-3. Расширение собирает **System PAC**: ваш PAC плюс выученные хосты, которые идут тем же маршрутом, что и их корень. Этот PAC ставится в браузер с `mandatory: true`: если прокси недоступен, соединение не откатывается на прямое.
-4. После одной–трёх перезагрузок сайт работает целиком через прокси.
+1. You write an ordinary PAC file — the **User PAC** — and mark the sites you want with the `root()` directive.
+2. When a root page requests an unknown host, the request is blocked (`declarativeNetRequest`) and the host is recorded in that root's group.
+3. The extension builds the **System PAC**: your PAC plus the learned hosts, which follow the same route as their root. The PAC is installed with `mandatory: true`, so if the proxy is unreachable the connection does not fall back to direct.
+4. After one to three reloads the site works entirely through the proxy.
 
-Перед применением каждый User PAC проходит разбор, статический анализ и пробный запуск в изолированной песочнице. Если текст невалиден, расширение остаётся в безопасном режиме и не открывает прямые соединения.
+Before it is applied, every User PAC goes through parsing, static analysis and a trial run in an isolated sandbox. If the text is invalid, the extension stays in safe mode and never opens direct connections.
 
-## Пример User PAC
+## User PAC example
 
 ```js
 deny("*.doubleclick.net");   // never load, block in root context
@@ -32,78 +33,82 @@ function FindProxyForURL(url, host) {
 }
 ```
 
-| Директива | Что делает |
+| Directive | What it does |
 | --- | --- |
-| `root(host, "domain")` | объявляет домен и все его поддомены корнем; маршрут корня задаёт ваш PAC, выученные хосты идут тем же маршрутом |
-| `deny("mask")` | домен не выучивается и блокируется, когда его запрашивает страница корня |
-| `bypass("mask")` | хост всегда идёт напрямую, во всех вкладках |
+| `root(host, "domain")` | declares the domain and all its subdomains a root; your PAC sets the root's route, and learned hosts follow the same route |
+| `deny("mask")` | the domain is never learned and is blocked when a root page requests it |
+| `bypass("mask")` | the host always goes direct, in every tab |
 
-Порядок разрешения, ограничения синтаксиса и готовый рецепт на сотню сайтов описаны в [инструкции пользователя](docs/USER-GUIDE.md).
+The resolution order, syntax restrictions and a ready-made recipe for a hundred sites are in the [user guide](docs/USER-GUIDE.md).
 
-## Установка
+## Installation
 
-Нужен **Chrome 145** или новее.
+Requires **Chrome 145** or later.
 
-1. Скачайте репозиторий (или архив релиза) и положите его в постоянную локальную папку, например `~/.local/share/rootpac` (Linux), `~/Library/Application Support/RootPAC/rootpac` (macOS) или `%LOCALAPPDATA%\RootPAC\rootpac` (Windows). Не используйте «Загрузки», рабочий стол и папки с облачной синхронизацией.
-2. Откройте `chrome://extensions`, включите **Режим разработчика**, нажмите **Загрузить распакованное расширение** и выберите папку, в которой лежит `manifest.json`.
-3. Откройте **Options** расширения, вставьте свой User PAC и нажмите **Save**.
+1. Download the repository (or a release archive) and put it in a permanent local folder, for example `~/.local/share/rootpac` (Linux), `~/Library/Application Support/RootPAC/rootpac` (macOS) or `%LOCALAPPDATA%\RootPAC\rootpac` (Windows). Avoid Downloads, the Desktop and cloud-synced folders.
+2. Open `chrome://extensions`, turn on **Developer mode**, click **Load unpacked** and select the folder that contains `manifest.json`.
+3. Open the extension's **Options**, paste your User PAC and click **Save**.
 
-Chrome читает распакованное расширение прямо из этой папки, а id расширения зависит от пути к ней. Поэтому папку не перемещайте, а после установки снимите с неё право записи. Порядок обновления с сохранением выученных групп (**Export** / **Import**) описан в [разделе 6 инструкции](docs/USER-GUIDE.md#6-где-хранить-папку-расширения).
+Chrome reads an unpacked extension directly from that folder, and the extension id depends on the folder's path. So do not move the folder, and remove write permission from it after installing. How to update while keeping the learned groups (**Export** / **Import**) is described in [section 6 of the user guide](docs/USER-GUIDE.md#6-where-to-keep-the-extension-folder).
 
-## Интерфейс
+## Interface
 
-- **Popup** — состояние текущей вкладки: сколько хостов загружено, сколько ушло в прокси, сколько новых заблокировано ради обучения (с кнопкой **Reload**).
-- **Options** — редактор User PAC с проверкой при сохранении, экспорт и импорт резервной копии.
-- **System PAC viewer** — применённый PAC только для чтения и выученные группы по корням; отдельные хосты и целые группы можно удалить.
-- **Иконка**: сине-серая — обычная вкладка; зелёная с бейджем — вкладка корня; янтарная — выучены новые хосты, нужна перезагрузка; серая с `!` — прокси не применён (безопасный режим или настройку перехватило другое расширение).
+- **Popup** — the state of the current tab: how many hosts were loaded, how many went through the proxy, how many new ones were blocked for learning (with a **Reload** button).
+- **Options** — the User PAC editor with checks on save, plus backup export and import.
+- **System PAC viewer** — the applied PAC, read-only, and the learned groups by root; single hosts and whole groups can be removed.
+- **Icon**: blue-grey — an ordinary tab; green with a badge — a root tab; amber — new hosts were learned, reload needed; grey with `!` — the proxy is not applied (safe mode, or another extension has taken over the proxy setting).
 
-## Разработка
+## Development
 
-Нужен Node.js 22 или новее. Зависимостей нет.
+Requires Node.js 22 or later. No dependencies.
 
 ```sh
 npm test
 ```
 
-Юнит-тесты (`node --test`) покрывают ядро: анализ User PAC, сборку System PAC, группировку хостов, правила DNR, Public Suffix List и резервные копии.
+The unit tests (`node --test`) cover the core: User PAC analysis, System PAC generation, host grouping, DNR rules, the Public Suffix List and backups.
 
-В `tools/` лежат проверки в настоящем Chromium. Для них нужны Python 3 и [Playwright](https://playwright.dev/python/). Большинство браузерных проверок принимает первым аргументом путь к папке расширения, поэтому можно сравнивать две сборки.
+`tools/` holds checks that run in a real Chromium. They need Python 3 and [Playwright](https://playwright.dev/python/). Most browser checks take the path to the extension folder as their first argument, so two builds can be compared.
 
-| Инструмент | Назначение |
+| Tool | Purpose |
 | --- | --- |
-| `tools/smoke.py` | сквозная проверка: локальный прокси и ориджины, обучение, блокировки, счётчики, перезапуск |
-| `tools/restart_netlog.py` | перезапуск браузера с расширением, установленным политикой, и NetLog с самого старта |
-| `tools/check_netlog.py` | анализ NetLog: прямые соединения защищённых хостов и контекста корня |
-| `tools/edge_hosts.py` | враждебные имена хостов: `localhost`, публичные суффиксы, `_`, 200 000 точек |
-| `tools/reporting_leak.py` | утечки через Reporting API (`Report-To`) |
-| `tools/perf.py` | время загрузки страниц и стоимость System PAC в движке PAC Chromium |
-| `tools/fuzz_groups.mjs` | фаззинг группировки, System PAC и DNR (без браузера) |
-| `tools/matrix.py` | матрица проверок на живых сайтах (нужен доступ в интернет) |
-| `tools/make_icons.py` | растеризация PNG-иконок из `icons/icon.svg` |
+| `tools/smoke.py` | end-to-end check: local proxy and origins, learning, blocking, counters, restart |
+| `tools/restart_netlog.py` | browser restart with a policy-installed extension and a NetLog from startup |
+| `tools/check_netlog.py` | NetLog analysis: direct connections of protected hosts and of the root context |
+| `tools/edge_hosts.py` | hostile host names: `localhost`, public suffixes, `_`, 200,000 dots |
+| `tools/reporting_leak.py` | leaks through the Reporting API (`Report-To`) |
+| `tools/perf.py` | page load time and the cost of the System PAC in Chromium's PAC engine |
+| `tools/fuzz_groups.mjs` | fuzzing of grouping, the System PAC and DNR (no browser) |
+| `tools/matrix.py` | scenario matrix on live sites (needs internet access) |
+| `tools/make_icons.py` | rasterizes the PNG icons from `icons/icon.svg` |
 
-### Структура
+### Layout
 
 ```
-manifest.json        манифест расширения (версия совпадает с package.json)
-src/core/            логика без Chrome API: анализ, сборка PAC, группы, правила, PSL
-src/background/      service worker: хранилище, прокси, DNR, обучение, бейдж, сообщения
-src/sandbox/         песочница для пробного запуска User PAC
-src/offscreen/       offscreen-документ, мост к песочнице
+manifest.json        extension manifest (version matches package.json)
+src/core/            logic without Chrome APIs: analysis, PAC build, groups, rules, PSL
+src/background/      service worker: storage, proxy, DNR, learning, badge, messages
+src/sandbox/         sandbox for the User PAC trial run
+src/offscreen/       offscreen document bridging to the sandbox
 src/ui/              popup, options, System PAC viewer
-vendor/              acorn, библиотека PAC из Chromium, Public Suffix List
-test/                юнит-тесты и фикстуры
-tools/               проверки в Chromium, фаззер, генератор иконок
-docs/USER-GUIDE.md   инструкция пользователя
+vendor/              acorn, Chromium's PAC library, Public Suffix List
+test/                unit tests and fixtures
+tools/               Chromium checks, fuzzer, icon generator
+docs/USER-GUIDE.md   user guide
 ```
 
-## Известные ограничения
+## Known limitations
 
-- `preconnect` и `preload` из ответа Early Hints (`103`) не видны DNR. Такие соединения закрываются только маршрутом в вашем User PAC.
-- `bypass`-хост получает ваш реальный IP, даже когда его запрашивает страница корня. Это осознанный компромисс.
-- Кнопки выключения в интерфейсе нет: она одним нажатием сняла бы и прокси, и блокировки. Выключается расширение в `chrome://extensions`.
+- `preconnect` and `preload` from an Early Hints (`103`) response are invisible to DNR. Such connections are covered only by the route in your User PAC.
+- A `bypass` host sees your real IP, even when a root page requests it. This is a deliberate trade-off.
+- There is no off switch in the interface: one click would remove both the proxy and the blocking. Disable the extension in `chrome://extensions`.
 
-## Сторонний код
+## License
 
-- [acorn](https://github.com/acornjs/acorn) — MIT, см. `vendor/acorn.LICENSE`.
-- Библиотека функций PAC из Chromium (`pac_js_library.h`) — BSD, см. `vendor/pac-library.LICENSE`.
+[MIT](LICENSE).
+
+Third-party code:
+
+- [acorn](https://github.com/acornjs/acorn) — MIT, see `vendor/acorn.LICENSE`.
+- Chromium's PAC function library (`pac_js_library.h`) — BSD, see `vendor/pac-library.LICENSE`.
 - [Public Suffix List](https://publicsuffix.org/) — MPL 2.0.

@@ -211,7 +211,7 @@ async def session(playwright, profile, port, netlog, first, failures, results):
                 state = await worker.evaluate("chrome.storage.local.get(null)")
                 hosts = group_hosts(state, "wikipedia.org")
                 print(f"load {attempt}: blocked {stopped or 'none'}, group {hosts}")
-                results.append((f"первое открытие, загрузка {attempt}", f"заблокировано {len(stopped)}, в группе {len(hosts)}"))
+                results.append((f"first visit, load {attempt}", f"blocked {len(stopped)}, in group {len(hosts)}"))
                 if not stopped:
                     break
             if stopped:
@@ -221,7 +221,7 @@ async def session(playwright, profile, port, netlog, first, failures, results):
             state = await worker.evaluate("chrome.storage.local.get(null)")
             learned_deny = [h for h in group_hosts(state, "wikipedia.org") if "google-analytics" in h]
             print(f"deny: {DENY_PROBE} {deny}, learned {learned_deny or 'none'}")
-            results.append(("запрос к deny-хосту со страницы корня", f"{deny}, в группу не попал: {not learned_deny}"))
+            results.append(("request to a deny host from the root page", f"{deny}, kept out of the group: {not learned_deny}"))
             if deny != "blocked" or learned_deny:
                 failures.append(f"deny host: {deny}, learned {learned_deny}")
 
@@ -231,7 +231,7 @@ async def session(playwright, profile, port, netlog, first, failures, results):
             learned_ru = [h for h in group_hosts(state, "wikipedia.org") if h.endswith(".ru")]
             through = [h for h in tunneled if h.endswith(BYPASS_HOST)]
             print(f"bypass: {BYPASS_HOST} {bypass}, through the proxy {through or 'none'}, learned {learned_ru or 'none'}")
-            results.append(('bypass("*.ru"), ресурс .ru со страницы корня', f"{bypass}, через прокси: {bool(through)}, выучен: {bool(learned_ru)}"))
+            results.append(('bypass("*.ru"), a .ru resource from the root page', f"{bypass}, through the proxy: {bool(through)}, learned: {bool(learned_ru)}"))
             if bypass != "loaded" or through or learned_ru:
                 failures.append(f"bypass: {bypass}, proxy {through}, learned {learned_ru}")
 
@@ -239,7 +239,7 @@ async def session(playwright, profile, port, netlog, first, failures, results):
             await load(page, SECOND_ROOT, blocked)
             proxied_root = [h for h in tunneled if h.endswith("ya.ru")]
             print(f"root under the bypass mask: ya.ru through the proxy {proxied_root or 'none'}")
-            results.append(("корень, совпадающий с bypass-маской (ya.ru)", f"через прокси: {bool(proxied_root)}"))
+            results.append(("root matching a bypass mask (ya.ru)", f"through the proxy: {bool(proxied_root)}"))
             if not proxied_root:
                 failures.append("a root matching the bypass mask did not go through the proxy")
 
@@ -251,7 +251,7 @@ async def session(playwright, profile, port, netlog, first, failures, results):
             outside = await worker.evaluate("id => chrome.action.getBadgeText({ tabId: id })", tab)
             after = group_hosts(await worker.evaluate("chrome.storage.local.get(null)"), "wikipedia.org")
             print(f"external link: badge {on_root!r} -> {outside!r}, group {len(before)} -> {len(after)}")
-            results.append(("переход по внешней ссылке", f"бейдж {on_root!r} → {outside!r}, группа не выросла: {before == after}"))
+            results.append(("following an external link", f"badge {on_root!r} → {outside!r}, group unchanged: {before == after}"))
             if outside != "" or on_root == "" or before != after:
                 failures.append(f"external link: badge {on_root!r} -> {outside!r}, group {len(before)} -> {len(after)}")
 
@@ -260,7 +260,7 @@ async def session(playwright, profile, port, netlog, first, failures, results):
             back = await worker.evaluate("id => chrome.action.getBadgeText({ tabId: id })", tab)
             state = await control(worker).evaluate("id => rootpac({ type: 'getTabState', tabId: id })", tab)
             print(f"back through BFCache: badge {back!r}, state {state['mask']}")
-            results.append(("назад через BFCache", f"бейдж {back!r}, маска {state['mask']}"))
+            results.append(("back through BFCache", f"badge {back!r}, mask {state['mask']}"))
             if back == "" or state["mask"] != "wikipedia.org":
                 failures.append(f"BFCache: badge {back!r}, state {state}")
 
@@ -275,7 +275,7 @@ async def session(playwright, profile, port, netlog, first, failures, results):
             mark = await worker.evaluate("typeof globalThis.__mark")
             state = await control(worker).evaluate("id => rootpac({ type: 'getTabState', tabId: id })", tab)
             print(f"service worker restart: fresh {mark == 'undefined'}, blocked {stopped or 'none'}, state {state['mask']} {state['hostCount']}")
-            results.append(("остановка service worker", f"перезапустился: {mark == 'undefined'}, состояние восстановлено: {state['mask'] == '*.wikipedia.org'}, блокировок {len(stopped)}"))
+            results.append(("service worker stop", f"restarted: {mark == 'undefined'}, state restored: {state['mask'] == '*.wikipedia.org'}, blocked {len(stopped)}"))
             if mark != "undefined" or state["mask"] != "wikipedia.org" or stopped:
                 failures.append(f"service worker restart: {mark}, {state}, blocked {stopped}")
 
@@ -288,7 +288,7 @@ async def session(playwright, profile, port, netlog, first, failures, results):
             rules_after = await worker.evaluate("Promise.all([chrome.declarativeNetRequest.getDynamicRules(), chrome.declarativeNetRequest.getSessionRules()]).then(([d, s]) => d.length + s.length)")
             pac = state["appliedPac"]
             print(f"root removed: ok {dropped['ok']}, group present {('group:*.ya.ru' in state)}, in PAC {'ya.ru' in pac}, rules {rules_before} -> {rules_after}")
-            results.append(("удаление root() из User PAC", f"группа удалена: {'group:*.ya.ru' not in state}, из PAC исчез: {'ya.ru' not in pac}, правил {rules_before} → {rules_after}"))
+            results.append(("removing root() from the User PAC", f"group removed: {'group:*.ya.ru' not in state}, gone from the PAC: {'ya.ru' not in pac}, rules {rules_before} → {rules_after}"))
             if not dropped["ok"] or "group:*.ya.ru" in state or "ya.ru" in pac or rules_after >= rules_before:
                 failures.append(f"removing a root: {dropped}, rules {rules_before} -> {rules_after}")
             await control(worker).evaluate("text => rootpac({ type: 'saveUserPac', text })", user_pac)
@@ -300,19 +300,19 @@ async def session(playwright, profile, port, netlog, first, failures, results):
                     break
                 await asyncio.sleep(0.1)
             print(f"restart: settings at startup {start}, after resync {level}")
-            results.append(("состояние настройки прокси сразу после запуска браузера", f"{start['level']}, режим {start['mode']}; после resync {level}"))
+            results.append(("proxy setting right after browser start", f"{start['level']}, mode {start['mode']}; after resync {level}"))
             tunneled.clear()
             stopped = await load(page, ROOT, blocked)
             hosts = group_hosts(await worker.evaluate("chrome.storage.local.get(null)"), "wikipedia.org")
             through = sorted({h for h in tunneled if h.endswith("wikipedia.org") or h.endswith("wikimedia.org")})
             print(f"after restart: blocked {stopped or 'none'}, through the proxy {len(through)} hosts, group {len(hosts)}")
-            results.append(("перезапуск браузера", f"блокировок {len(stopped)}, через прокси {len(through)} хостов"))
+            results.append(("browser restart", f"blocked {len(stopped)}, {len(through)} hosts through the proxy"))
             if stopped or not through:
                 failures.append(f"after the restart: blocked {stopped}, proxied {through}")
         aggregated = [h for h in group_hosts(await worker.evaluate("chrome.storage.local.get(null)"), "wikipedia.org") if h.endswith("wikimedia.org")]
         print(f"aggregation on a real site: {aggregated}")
         if first:
-            results.append(("объединение поддоменов (wikimedia.org)", f"{aggregated}"))
+            results.append(("subdomain aggregation (wikimedia.org)", f"{aggregated}"))
         settings = await worker.evaluate("chrome.proxy.settings.get({})")
         if not settings["value"]["pacScript"]["mandatory"]:
             failures.append("PAC is not mandatory")
@@ -333,7 +333,7 @@ async def main():
     for index, path in enumerate(logs, start=1):
         netlog_report(path, domains, failures, f"netlog session {index}", direct_ok=[BYPASS_HOST] if index == 1 else [])
     print()
-    print("| Сценарий | Результат |")
+    print("| Scenario | Result |")
     print("| --- | --- |")
     for name, verdict in results:
         print(f"| {name} | {verdict} |")

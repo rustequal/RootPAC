@@ -1,77 +1,77 @@
-# RootPAC — инструкция
+# RootPAC — User Guide
 
-Расширение маршрутизирует через прокси корневой сайт и все хосты, которые загружают его страницы. Невыученный хост в контексте корня блокируется до перезагрузки страницы — так он не успевает получить ваш реальный IP. Вы пишете обычный PAC-файл (User PAC), расширение достраивает из него System PAC с выученными хостами и ставит его в настройки браузера.
+The extension routes a root site and every host its pages load through a proxy. In the root context, a host that has not been learned yet is blocked until the page is reloaded, so it never gets a chance to see your real IP. You write an ordinary PAC file (the User PAC); the extension builds a System PAC from it with the learned hosts added and installs it in the browser settings.
 
-## 1. Три директивы
+## 1. Three directives
 
-В User PAC доступны три функции сверх обычного PAC. Их вызовы расширение извлекает из текста статически, поэтому форма записи жёсткая.
+The User PAC gets three functions on top of standard PAC. The extension extracts their calls from the text statically, so the syntax is strict.
 
-| Директива | Где пишется | Что делает | Выучивается? | Блокируется в контексте корня? |
+| Directive | Where it goes | What it does | Learned? | Blocked in root context? |
 | --- | --- | --- | --- | --- |
-| `root(host, "domain")` | внутри `FindProxyForURL` | объявляет домен корнем — сам домен и все его поддомены; маршрут для корня выбирает ваш PAC | — | нет |
-| `deny("mask")` | отдельной строкой на верхнем уровне | домен маски вместе со всеми поддоменами не выучивается и блокируется, когда его запрашивает страница корня | нет | да |
-| `bypass("mask")` | отдельной строкой на верхнем уровне | хосты маски всегда идут мимо прокси, во всех вкладках | нет | нет |
+| `root(host, "domain")` | inside `FindProxyForURL` | declares the domain a root — the domain itself and all its subdomains; your PAC chooses the route for the root | — | no |
+| `deny("mask")` | on its own line at the top level | the mask's domain and all its subdomains are never learned and are blocked when a root page requests them | no | yes |
+| `bypass("mask")` | on its own line at the top level | hosts matching the mask always go direct, in every tab | no | no |
 
-**`root`** — предикат «хост — это домен или его поддомен». Он и проверяет хост, и одновременно объявляет домен корнем: расширение видит вызов в тексте и заводит под домен одну группу выученных хостов. `root(host, "youtube.com")` покрывает `youtube.com`, `www.youtube.com`, `m.youtube.com` и любые другие поддомены.
+**`root`** is a predicate: "the host is this domain or one of its subdomains". It checks the host and at the same time declares the domain a root: the extension sees the call in the text and creates one group of learned hosts for the domain. `root(host, "youtube.com")` covers `youtube.com`, `www.youtube.com`, `m.youtube.com` and any other subdomain.
 
-**`deny`** — «этот домен мне не нужен вообще». Типичная цель — аналитика и реклама. Маска `deny` действует на весь свой домен: `deny("*.tracker.com")` и `deny("tracker.com")` одинаково закрывают и `tracker.com`, и любой его поддомен. В контексте корня запрос отклоняется, в группу хост не попадает, а если он там уже был — удаляется. Вне контекста корня `deny` ни на что не влияет: маршрут решает ваш `FindProxyForURL`.
+**`deny`** means "I never want this domain". Typical targets are analytics and ads. A `deny` mask applies to its whole domain: `deny("*.tracker.com")` and `deny("tracker.com")` both block `tracker.com` and every subdomain of it. In the root context the request is rejected and the host is not added to the group; if it was already there, it is removed. Outside the root context `deny` has no effect: your `FindProxyForURL` decides the route.
 
-**`bypass`** — «этот хост никогда не должен идти через прокси». Типичная цель — локальная сеть, банк, национальная зона. Такой хост загружается напрямую даже со страницы корня, не выучивается и не блокируется. Это осознанный компромисс: bypass-хост увидит ваш реальный IP, в том числе когда его запрашивает страница корня.
+**`bypass`** means "this host must never go through the proxy". Typical targets are the local network, a bank, a national zone. Such a host is loaded directly even from a root page, and it is neither learned nor blocked. This is a deliberate trade-off: a bypass host sees your real IP, including when a root page requests it.
 
-Разница между `deny` и `bypass` в одну строку: `deny` — «не пускать», `bypass` — «пускать, но мимо прокси».
+The difference in one line: `deny` is "don't let it through", `bypass` is "let it through, but not via the proxy".
 
-### Порядок разрешения
+### Resolution order
 
-System PAC для каждого запроса проверяет условия в таком порядке:
+For every request the System PAC checks these conditions in order:
 
-1. **Маска `root`** — вызывается ваш `FindProxyForURL`, из ответа выбрасывается `DIRECT`; если не осталось ни одного прокси, PAC бросает ошибку и запрос не уходит.
-2. **Выученный хост** — идёт по правилу своего корня. Это решение принимается для всего браузера, а не только для вкладки корня. Выученная запись покрывает свои поддомены; исключение — публичный суффикс вроде `github.io` или `s3.amazonaws.com`: такая запись действует только на сам этот хост, чтобы не увести в прокси все сайты зоны.
-3. **Маска `bypass`** — `DIRECT` без вызова вашего PAC.
-4. **Всё остальное** — ваш `FindProxyForURL` как есть.
+1. **`root` mask** — your `FindProxyForURL` is called and `DIRECT` is stripped from its answer; if no proxy is left, the PAC throws and the request is not sent.
+2. **Learned host** — follows the rule of its root. This decision applies to the whole browser, not only to the root tab. A learned entry covers its subdomains; the exception is a public suffix such as `github.io` or `s3.amazonaws.com`: such an entry applies only to that exact host, so it does not pull every site in the zone into the proxy.
+3. **`bypass` mask** — `DIRECT` without calling your PAC.
+4. **Everything else** — your `FindProxyForURL` as is.
 
-Корень главнее bypass: при `bypass("*.ru")` и `root(host, "mail.ru")` сам mail.ru идёт через прокси, а остальной `.ru` — напрямую. Порядок директив в тексте не важен, важен только порядок проверок выше.
+Root wins over bypass: with `bypass("*.ru")` and `root(host, "mail.ru")`, mail.ru itself goes through the proxy and the rest of `.ru` goes direct. The order of directives in the text does not matter; only the order of checks above does.
 
-## 2. Правила, на которых чаще всего спотыкаются
+## 2. Common pitfalls
 
-- **Корень — всегда домен целиком.** Узкого корня вида «только поддомены» не бывает: блокировки браузера (DNR) работают по домену целиком, и корень без самого домена оставил бы переход на `example.com` незащищённым. `root(host, "*.example.com")` — ошибка сохранения с подсказкой написать `root(host, "example.com")`.
-- **Только нижний регистр.** `root(host, "Example.com")` — ошибка сохранения, а не автоисправление.
-- **Маска корня — домен**, минимум две метки: `example.com`, `cdn.example.com`. Маска `deny` — `domain` или `*.domain`, обе закрывают домен целиком. Маска `bypass` — `domain`, `*.domain` или зона из одной метки: `*.ru`, `ru`; здесь `*.` значит «только поддомены».
-- **Метка — до 63 символов, имя — до 253, в конце не число.** `root(host, "1.2.3.4")` и `deny("cdn.2")` — ошибка: такое имя браузер читает как IP-адрес, и маска не совпала бы ни с одним хостом.
-- **Корень не может быть в домене `localhost`**: Chrome никогда не отправляет такие имена в прокси.
-- **`deny` не может закрывать сам корень**: `deny("example.com")` при `root(host, "cdn.example.com")` — ошибка, иначе сайт корня открывался бы пустым. `deny` на поддомен корня допустим — так закрывают трекер самого сайта.
-- **Кириллические зоны — в punycode**: `.рф` → `*.xn--p1ai`.
-- **`root`, `deny`, `bypass` нельзя переопределять и передавать как значения.** Допустим только прямой вызов. `var f = root`, `typeof root`, `obj.method(root)` — отказ.
-- **Зарезервированные имена**: `__user` и `__fuel`.
-- **Маски `deny` и `bypass` не должны пересекаться** — иначе непонятно, блокировать хост или пускать напрямую. `deny` здесь считается целым доменом: `deny("x.com")` пересекается с `bypass("*.x.com")`. Пересечение `bypass` с `root` допустимо.
-- **Строка прокси для корня — только `СХЕМА хост[:порт]`.** Схемы `PROXY`, `HTTPS`, `SOCKS`, `SOCKS4`, `SOCKS5`; хост — имя, IPv4 или `[IPv6]`; порт 1–65535. Логин и пароль в строке (`PROXY user:pass@host:port`), схема URL (`PROXY http://host:port`) и порт вне диапазона Chrome молча выбрасывает и соединяется напрямую, поэтому System PAC такие элементы отбрасывает сам. Если на пробах при сохранении прокси не осталось, это ошибка сохранения; если такая строка появится только в редкой ветке вашего PAC, запрос завершится ошибкой, а не прямым соединением.
-- **`FindProxyForURL` ровно одна**, обычная функция: не `async`, не генератор.
-- **Hashbang запрещён.**
+- **A root is always a whole domain.** There is no narrow "subdomains only" root: browser blocking (DNR) works on whole domains, and a root without its apex would leave navigation to `example.com` unprotected. `root(host, "*.example.com")` is a save error with a hint to write `root(host, "example.com")`.
+- **Lowercase only.** `root(host, "Example.com")` is a save error, not an auto-correction.
+- **A root mask is a domain** with at least two labels: `example.com`, `cdn.example.com`. A `deny` mask is `domain` or `*.domain`; both block the whole domain. A `bypass` mask is `domain`, `*.domain` or a single-label zone: `*.ru`, `ru`; here `*.` means "subdomains only".
+- **A label is at most 63 characters, a name at most 253, and the last label is not a number.** `root(host, "1.2.3.4")` and `deny("cdn.2")` are errors: the browser reads such a name as an IP address, and the mask would never match a host.
+- **A root cannot be under `localhost`**: Chrome never sends such names to a proxy.
+- **`deny` cannot block the root itself**: `deny("example.com")` together with `root(host, "cdn.example.com")` is an error, otherwise the root site would open empty. `deny` on a subdomain of a root is allowed — that is how you block the site's own tracker.
+- **Internationalized zones are written in punycode**, for example `*.xn--p1ai`.
+- **`root`, `deny` and `bypass` cannot be redefined or passed around as values.** Only a direct call is allowed. `var f = root`, `typeof root`, `obj.method(root)` are rejected.
+- **Reserved names**: `__user` and `__fuel`.
+- **`deny` and `bypass` masks must not overlap** — otherwise it is unclear whether to block the host or let it go direct. Here `deny` counts as a whole domain: `deny("x.com")` overlaps `bypass("*.x.com")`. A `bypass` overlapping a `root` is allowed.
+- **A proxy string for a root is only `SCHEME host[:port]`.** Schemes are `PROXY`, `HTTPS`, `SOCKS`, `SOCKS4`, `SOCKS5`; the host is a name, IPv4 or `[IPv6]`; the port is 1–65535. Chrome silently drops credentials in the string (`PROXY user:pass@host:port`), a URL scheme (`PROXY http://host:port`) and an out-of-range port, and connects directly, so the System PAC drops such entries itself. If no proxy is left in the probes run on save, it is a save error; if such a string only shows up in a rare branch of your PAC, the request fails instead of going direct.
+- **Exactly one `FindProxyForURL`**, a plain function: not `async`, not a generator.
+- **No hashbang.**
 
-Любое нарушение — отказ при сохранении с позицией `строка:столбец`. Действующая конфигурация при этом не меняется: сломать работающий прокси неудачной правкой нельзя.
+Any violation is rejected on save with a `line:column` position. The active configuration stays unchanged, so a bad edit cannot break a working proxy.
 
-## 3. Как собрать User PAC на сотню сайтов
+## 3. Building a User PAC for a hundred sites
 
-Файл на сто сайтов читается ровно до тех пор, пока в нём есть структура. Рабочая схема — четыре блока.
+A file with a hundred sites stays readable only as long as it has structure. A working layout has four blocks.
 
-**Блок 1 — запреты и исключения.** Наверху, одним списком: сначала `deny` для трекеров, потом `bypass` для зон, которые никогда не должны идти через прокси. Эти списки общие для всех сайтов, дублировать их по сайтам не нужно.
+**Block 1 — denials and exceptions.** At the top, as one list: first `deny` for trackers, then `bypass` for zones that must never go through the proxy. These lists are shared by all sites; there is no need to repeat them per site.
 
-**Блок 2 — прокси-константы.** По одной переменной на каждый выход. Осмысленные имена (`NL`, `DE`, `HOME`) лучше, чем `PROXY1`: в строке про конкретный сайт сразу видно, куда он пойдёт.
+**Block 2 — proxy constants.** One variable per exit. Meaningful names (`NL`, `DE`, `HOME`) are better than `PROXY1`: the line for a given site shows at a glance where it goes.
 
-**Блок 3 — сайты, сгруппированные по смыслу.** Секции комментариями (`// --- social ---`), внутри секции по одной строке на сайт: `root()` с доменом и комментарий в конце строки — зачем этот сайт здесь и через какой выход идёт. Сто строк такого вида читаются и правятся без труда; сто сайтов в одном `if` с двумястами `||` — нет.
+**Block 3 — sites grouped by topic.** Sections marked with comments (`// --- social ---`), one line per site inside a section: `root()` with the domain and a trailing comment saying why the site is here and which exit it uses. A hundred lines like that are easy to read and edit; a hundred sites in a single `if` with two hundred `||` are not.
 
-**Блок 4 — умолчание.** `return "DIRECT";` последней строкой.
+**Block 4 — the default.** `return "DIRECT";` as the last line.
 
-Одна строка на сайт выглядит так:
+One line per site looks like this:
 
 ```javascript
-if (root(host, "instagram.com")) return NL;   // личный аккаунт, нужен не-российский выход
+if (root(host, "instagram.com")) return NL;   // personal account, needs a foreign exit
 ```
 
-Добавить сайт — дописать такую строку. Убрать сайт — удалить её: группа выученных хостов исчезнет из System PAC сама, правила блокировки для неё тоже снимутся.
+To add a site, add such a line. To remove a site, delete it: its group of learned hosts disappears from the System PAC by itself, and its blocking rules are removed too.
 
-Пара практических замечаний. Порядок строк на маршрутизацию не влияет, пока маски не пересекаются, так что сортируйте как удобно читать. Если два сайта делят один CDN, выучен он будет только в одной группе — в той, чья страница запросила его первой; на маршрут это не влияет, потому что оба корня всё равно идут через прокси. И не заводите корень на домен, который уже попал под `bypass`, если не понимаете, зачем: корень победит, и вы получите прокси там, где ожидали прямое соединение.
+A few practical notes. The order of lines does not affect routing as long as masks do not overlap, so sort them however reads best. If two sites share a CDN, it is learned in only one group — the one whose page requested it first; routing is not affected, because both roots go through the proxy anyway. And do not declare a root on a domain already covered by `bypass` unless you know why: the root wins, and you get the proxy where you expected a direct connection.
 
-### Шаблон
+### Template
 
 ```javascript
 // --- trackers: never wanted, blocked on root pages ---
@@ -114,82 +114,82 @@ function FindProxyForURL(url, host) {
 }
 ```
 
-Комментарии в самом PAC — на английском: этот текст уходит в System PAC и в настройки браузера как есть.
+Keep comments in the PAC itself in English: this text goes into the System PAC and the browser settings as is.
 
-### Сокращатели ссылок
+### Link shorteners
 
-`youtu.be`, `t.co`, `redd.it` и прочие заглушки из соцсетей — это отдельные домены, и каждая такая строка заводит новый корень со своей группой. Группа у них почти всегда остаётся пустой: сокращатель отдаёт редирект, и top-level хост вкладки меняется на целевой сайт раньше, чем страница успевает что-то загрузить. В viewer вы увидите запись с `no root host yet` и нулём хостов — так и должно быть.
+`youtu.be`, `t.co`, `redd.it` and other social network stubs are separate domains, and each such line creates a new root with its own group. Their group almost always stays empty: the shortener returns a redirect, and the tab's top-level host changes to the target site before the page loads anything. In the viewer you will see an entry with `no root host yet` and zero hosts — that is expected.
 
-Корнем объявлять всё равно нужно. Без `root()` первый запрос к сокращателю уйдёт по умолчанию вашего PAC, то есть напрямую, и вы постучитесь к его серверу с реальным IP — а это ровно тот запрос, который выдаёт, какую именно ссылку вы открываете. Написать вместо этого обычное условие вида `if (host === "youtu.be") return NL;` можно: хост уйдёт в прокси, группы и правил не прибавится. Но тогда в контексте такой вкладки не будет блокировки, и если сокращатель однажды начнёт показывать промежуточную страницу с рекламой или баннером про куки, её подресурсы уйдут напрямую. Заранее угадать, какой из них так сделает, нельзя, поэтому по умолчанию — `root()`.
+You should still declare them as roots. Without `root()`, the first request to the shortener follows your PAC's default, that is, goes direct, and you hit its server with your real IP — exactly the request that reveals which link you are opening. You can write a plain condition like `if (host === "youtu.be") return NL;` instead: the host goes through the proxy and no group or rules are added. But then there is no blocking in the context of that tab, and if the shortener one day starts showing an interstitial page with ads or a cookie banner, its subresources go direct. There is no way to guess in advance which one will do that, so `root()` is the default.
 
-Цена лишнего корня мала: пустая группа и одно regex-правило разрешения. Блокирующее правило одно на все корни сразу и от новых масок не растёт. Потолок DNR — 1000 regex-правил на корни и bypass вместе, так что сотня сайтов плюс десяток сокращателей укладывается с запасом.
+An extra root is cheap: an empty group and one regex allow rule. There is a single blocking rule for all roots, and it does not grow with new masks. The DNR limit is 1000 regex rules for roots and bypass combined, so a hundred sites plus a dozen shorteners fit with room to spare.
 
-Обучение между корнями общее: разрешения для выученных хостов заданы без привязки к корню, а поиск в System PAC идёт по всем группам сразу. Если сокращатель всё-таки загрузит хост, уже выученный под целевым сайтом, тот и разрешится, и уйдёт в прокси без отдельного цикла обучения.
+Learning is shared between roots: allow rules for learned hosts are not tied to a root, and the System PAC looks up all groups at once. If a shortener does load a host already learned under the target site, that host is allowed and goes through the proxy without a separate learning cycle.
 
-Три правила на практике. Ставьте сокращателю тот же выход, что и целевому сайту, иначе редирект пересекает выходы: первый запрос с одного IP, целевая страница с другого — для сайтов с привязкой сессии и антиботом это лишний риск. Одна строка `root(host, "youtu.be")` покрывает и сам сокращатель, и его поддомены, если они появятся. Если апекс сокращателя — настоящий сайт с контентом, как у bit.ly, он обучается как обычный корень той же строкой.
+Three rules in practice. Give a shortener the same exit as its target site, otherwise the redirect crosses exits: the first request from one IP, the target page from another — an extra risk for sites with session pinning and anti-bot checks. A single line `root(host, "youtu.be")` covers both the shortener and its subdomains, should any appear. If the shortener's apex is a real site with content, like bit.ly, the same line makes it learn like any other root.
 
-### Обучение после правки
+### Learning after an edit
 
-Новый сайт корня обучается за одну–три перезагрузки: на первой его сторонние хосты блокируются и записываются в группу, на второй уже идут через прокси. Иконка в этот момент янтарная, в popup — строка `N new hosts blocked and learned` и кнопка **Reload**. Это нормальный режим, а не ошибка.
+A new root site is learned within one to three reloads: on the first one its third-party hosts are blocked and recorded in the group, on the second they already go through the proxy. The icon is amber at that point, and the popup shows the line `N new hosts blocked and learned` and a **Reload** button. This is normal operation, not an error.
 
-## 4. Интерфейс
+## 4. Interface
 
-**Popup** (клик по иконке). На вкладке корня показывает маску корня и счётчики с последней загрузки страницы: сколько хостов загрузилось, сколько ушло в прокси, сколько новых заблокировано ради обучения (с кнопкой **Reload**) и сколько всего хостов в группе этого корня. Все счётчики считают только динамические хосты: сам корень и другие хосты под его маской в них не входят. На посторонней вкладке — `Not a root tab`. Кнопки **Options** и **System PAC** открывают две другие страницы.
+**Popup** (click the icon). On a root tab it shows the root mask and counters since the last page load: how many hosts were loaded, how many went through the proxy, how many new ones were blocked for learning (with a **Reload** button) and how many hosts are in this root's group in total. All counters count only dynamic hosts: the root itself and other hosts under its mask are not included. On any other tab it shows `Not a root tab`. The **Options** and **System PAC** buttons open the other two pages.
 
-**Options** — редактор User PAC. **Save** запускает проверку: разбор, статический анализ и пробный запуск в песочнице; ошибки показываются списком `строка:столбец сообщение`, клик по ошибке ставит курсор. **Revert** возвращает сохранённый текст, **Cancel** обрывает затянувшуюся проверку. `Ctrl+S` сохраняет из любого места страницы, Tab вставляет два пробела. Ниже — **Export** и **Import** для резервной копии (User PAC вместе с выученными группами) и ссылка на System PAC viewer.
+**Options** is the User PAC editor. **Save** runs the checks: parsing, static analysis and a trial run in the sandbox; errors are listed as `line:column message`, and clicking an error moves the cursor there. **Revert** restores the saved text, **Cancel** aborts a check that takes too long. `Ctrl+S` saves from anywhere on the page, Tab inserts two spaces. Below are **Export** and **Import** for backups (the User PAC together with the learned groups) and a link to the System PAC viewer.
 
-**System PAC viewer** — сгенерированный PAC только для чтения с кнопками **Copy** и **Download**, ниже группы по корням. Группа раскрывается по клику: host, first seen, last seen и **Remove** для одной записи, **Clear group** для всей группы. Фильтр ищет по подстроке хоста и раскрывает совпавшие группы. Внизу — ссылка на редактор User PAC.
+**System PAC viewer** shows the generated PAC read-only with **Copy** and **Download** buttons, and the groups by root below it. Click a group to expand it: host, first seen, last seen and **Remove** for a single entry, **Clear group** for the whole group. The filter searches by host substring and expands the matching groups. At the bottom is a link to the User PAC editor.
 
-**Иконка.** Сине-серая — обычная вкладка. Зелёная с красным бейджем — вкладка корня, число в бейдже равно числу выученных хостов, ушедших в прокси на этой странице. Янтарная — на этой загрузке выучены новые хосты, нужна перезагрузка. Серая с `!` — прокси выключен, расширение в безопасном режиме или настройку прокси перехватило другое расширение.
+**Icon.** Blue-grey — an ordinary tab. Green with a red badge — a root tab; the badge shows how many learned hosts went through the proxy on this page. Amber — new hosts were learned on this load, a reload is needed. Grey with `!` — the proxy is off: the extension is in safe mode or another extension has taken over the proxy setting.
 
-**Выключение.** Кнопки выключения в интерфейсе нет намеренно: она снимает и прокси, и блокировку, то есть открывает прямые соединения одним случайным нажатием. Выключается расширение через `chrome://extensions`.
+**Turning it off.** There is deliberately no off switch in the interface: it would remove both the proxy and the blocking, opening direct connections with one accidental click. Disable the extension in `chrome://extensions`.
 
-## 5. Если что-то пошло не так
+## 5. Troubleshooting
 
-- **Страница корня не открывается совсем.** Скорее всего прокси недоступен: PAC ставится с `mandatory: true`, и при отказе прокси браузер не уходит на прямое соединение, а показывает ошибку. Это защита, а не сбой.
-- **Сайт не работает после нескольких перезагрузок.** Посмотрите в popup строку новых хостов: если она не пустеет, сайт постоянно ходит на новые имена. Загляните в viewer — возможно, нужный хост попал под `deny`.
-- **Ресурс упорно идёт напрямую.** Проверьте маски `bypass`: она могла зацепить его зону.
-- **Серая иконка с `!`.** Другое расширение перехватило настройку прокси либо сохранённый User PAC невалиден и расширение в безопасном режиме — в этом случае в Options уже показан список ошибок.
-- **Нужно посмотреть, что реально применено.** System PAC viewer показывает текст, который стоит в браузере прямо сейчас, и его можно скачать кнопкой **Download**.
+- **The root page does not open at all.** Most likely the proxy is unreachable: the PAC is installed with `mandatory: true`, and when the proxy fails the browser does not fall back to a direct connection but shows an error. This is protection, not a malfunction.
+- **The site still does not work after several reloads.** Check the new hosts line in the popup: if it never goes away, the site keeps requesting new names. Look in the viewer — the host you need may be covered by `deny`.
+- **A resource keeps going direct.** Check your `bypass` masks: one of them may cover its zone.
+- **Grey icon with `!`.** Another extension has taken over the proxy setting, or the saved User PAC is invalid and the extension is in safe mode — in that case Options already shows the list of errors.
+- **You need to see what is actually applied.** The System PAC viewer shows the text currently installed in the browser, and you can save it with **Download**.
 
-## 6. Где хранить папку расширения
+## 6. Where to keep the extension folder
 
-RootPAC ставится как распакованное расширение: Chrome не копирует файлы в свой профиль, а читает их прямо из папки, выбранной в «Загрузить распакованное расширение». Всё, что случится с этой папкой, случится с расширением:
+RootPAC is installed as an unpacked extension: Chrome does not copy the files into its profile but reads them directly from the folder chosen in "Load unpacked". Whatever happens to that folder happens to the extension:
 
-- **файл изменён** — изменённый код начнёт работать после перезагрузки расширения или перезапуска браузера;
-- **папка удалена, переименована или перемещена** — при следующем запуске Chrome не сможет загрузить расширение, а без него не действуют ни его PAC, ни блокировки, и сайты корней пойдут по обычным настройкам браузера;
-- **папка перемещена и расширение загружено заново** — id распакованного расширения зависит от пути, поэтому Chrome заведёт новое расширение с пустым хранилищем, и выученные группы придётся вернуть через **Import**.
+- **a file is changed** — the changed code runs after the extension is reloaded or the browser is restarted;
+- **the folder is deleted, renamed or moved** — on the next start Chrome cannot load the extension, and without it neither its PAC nor its blocking is in effect, so root sites follow the browser's regular settings;
+- **the folder is moved and the extension is loaded again** — the id of an unpacked extension depends on its path, so Chrome creates a new extension with empty storage, and the learned groups have to be restored with **Import**.
 
-Состояние (User PAC, группы, правила блокировки) хранится в профиле Chrome, а не в папке, поэтому папке для работы нужно только чтение.
+The state (User PAC, groups, blocking rules) is stored in the Chrome profile, not in the folder, so the folder only needs to be readable.
 
-### Выбор места
+### Choosing a location
 
-Папка должна быть постоянной, локальной и такой, куда вы не заходите по работе:
+The folder should be permanent, local, and somewhere you do not work in:
 
-| Система | Рекомендуемый путь |
+| System | Recommended path |
 | --- | --- |
-| Windows | `%LOCALAPPDATA%\RootPAC\rootpac` (обычно `C:\Users\<имя>\AppData\Local\RootPAC\rootpac`) |
+| Windows | `%LOCALAPPDATA%\RootPAC\rootpac` (usually `C:\Users\<name>\AppData\Local\RootPAC\rootpac`) |
 | macOS | `~/Library/Application Support/RootPAC/rootpac` |
 | Linux | `~/.local/share/rootpac` |
 
-Не подходят:
-- **«Загрузки» и «Рабочий стол».** Туда постоянно пишут другие программы, их чистят вручную, а «Контроль памяти» Windows, если в нём включена очистка «Загрузок», удаляет давно не открытые файлы автоматически.
-- **Папки, которые синхронизирует облако** (OneDrive, iCloud Drive, Dropbox, Google Drive). Синхронизация может заменить файлы версией с другого компьютера или выгрузить их из локального диска.
-- **Временные папки** и папка распакованного архива рядом с другими загрузками.
+Not suitable:
+- **Downloads and Desktop.** Other programs write there constantly, people clean them by hand, and Windows Storage Sense, if it is set to clean Downloads, deletes files that have not been opened for a while automatically.
+- **Cloud-synced folders** (OneDrive, iCloud Drive, Dropbox, Google Drive). Sync may replace files with a version from another computer or offload them from the local disk.
+- **Temporary folders**, and an unpacked archive sitting next to other downloads.
 
-Путь выбирается один раз, до установки: в нём же потом делаются все обновления (см. «Обновление» ниже).
+Choose the path once, before installing: all future updates happen in the same place (see "Updating" below).
 
-### Защита от записи
+### Write protection
 
-После распаковки уберите право записи. Расширению это не мешает: на Chromium 153 в Linux полный автоматический прогон, включая перезапуск браузера, прошёл из папки без права записи, и Chrome ничего в неё не записал. На Windows и macOS сделайте проверку в конце раздела.
+After unpacking, remove write permission. It does not affect the extension: on Chromium 153 on Linux a full automated run, including a browser restart, passed from a read-only folder, and Chrome wrote nothing to it. On Windows and macOS, run the check at the end of this section.
 
-**Windows** — два уровня, достаточно первого:
+**Windows** — two levels, the first is enough:
 
-- Атрибут «только чтение» на все файлы (от случайной правки в редакторе):
+- The read-only attribute on all files (against accidental edits in an editor):
   ```
   attrib +R "%LOCALAPPDATA%\RootPAC\rootpac\*" /S /D
   ```
-- Строже — права NTFS: только чтение для вашей учётной записи, без удаления и записи:
+- Stricter — NTFS permissions: read-only for your account, no delete and no write:
   ```
   icacls "%LOCALAPPDATA%\RootPAC\rootpac" /inheritance:r /grant:r "%USERNAME%:(OI)(CI)RX"
   ```
@@ -198,24 +198,24 @@ RootPAC ставится как распакованное расширение:
 ```
 chmod -R a-w ~/Library/Application\ Support/RootPAC/rootpac
 ```
-Строже — флаг неизменяемости, который не даёт удалить и переименовать файлы даже с правами владельца: `chflags -R uchg <путь>`.
+Stricter — the immutable flag, which prevents deleting and renaming files even by their owner: `chflags -R uchg <path>`.
 
 **Linux:**
 ```
 chmod -R a-w ~/.local/share/rootpac
 ```
 
-Проверка: откройте `chrome://extensions`, нажмите «Обновить» у RootPAC и убедитесь, что ошибок нет и иконка на сайте корня зелёная.
+Check: open `chrome://extensions`, click "Reload" on RootPAC and make sure there are no errors and the icon is green on a root site.
 
-### Обновление
+### Updating
 
-1. Закройте вкладки корней и сделайте **Export** в Options.
-2. Верните право записи:
-   - Windows: `attrib -R "<путь>\*" /S /D`, после `icacls` — `icacls "<путь>" /reset /T`;
-   - macOS: `chflags -R nouchg <путь>` (если ставили), затем `chmod -R u+w <путь>`;
-   - Linux: `chmod -R u+w <путь>`.
-3. Замените содержимое той же папки файлами нового архива. Путь не меняйте.
-4. Снова уберите право записи, как в разделе выше.
-5. В `chrome://extensions` нажмите «Обновить» у RootPAC.
+1. Close root tabs and click **Export** in Options.
+2. Restore write permission:
+   - Windows: `attrib -R "<path>\*" /S /D`, and after `icacls` — `icacls "<path>" /reset /T`;
+   - macOS: `chflags -R nouchg <path>` (if you set it), then `chmod -R u+w <path>`;
+   - Linux: `chmod -R u+w <path>`.
+3. Replace the contents of the same folder with the files of the new version. Do not change the path.
+4. Remove write permission again, as in the section above.
+5. In `chrome://extensions`, click "Reload" on RootPAC.
 
-Сохраните архив текущей версии отдельно. Если папка всё же повреждена, распакуйте его по тому же пути: id не изменится, и расширение подхватит своё хранилище из профиля.
+Keep the archive of the current version separately. If the folder does get damaged, unpack it to the same path: the id stays the same, and the extension picks up its storage from the profile.
