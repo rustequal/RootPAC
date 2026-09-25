@@ -68,19 +68,14 @@ npm test
 
 The unit tests (`node --test`) cover the core: User PAC analysis, System PAC generation, host grouping, DNR rules, the Public Suffix List and backups.
 
-`tools/` holds checks that run in a real Chromium. They need Python 3 and [Playwright](https://playwright.dev/python/). Most browser checks take the path to the extension folder as their first argument, so two builds can be compared.
+`tools/` holds extra checks:
 
-| Tool | Purpose |
-| --- | --- |
-| `tools/smoke.py` | end-to-end check: local proxy and origins, learning, blocking, counters, restart |
-| `tools/restart_netlog.py` | browser restart with a policy-installed extension and a NetLog from startup |
-| `tools/check_netlog.py` | NetLog analysis: direct connections of protected hosts and of the root context |
-| `tools/edge_hosts.py` | hostile host names: `localhost`, public suffixes, `_`, 200,000 dots |
-| `tools/reporting_leak.py` | leaks through the Reporting API (`Report-To`) |
-| `tools/perf.py` | page load time and the cost of the System PAC in Chromium's PAC engine |
-| `tools/fuzz_groups.mjs` | fuzzing of grouping, the System PAC and DNR (no browser) |
-| `tools/matrix.py` | scenario matrix on live sites (needs internet access) |
-| `tools/make_icons.py` | rasterizes the PNG icons from `icons/icon.svg` |
+| Tool | Purpose | Usage |
+| --- | --- | --- |
+| `tools/smoke.py` | end-to-end check in a real Chromium: local proxy and origins, learning, blocking, counters, restart. Needs Python 3 and [Playwright](https://playwright.dev/python/) | `python3 tools/smoke.py [extension-folder]` |
+| `tools/fuzz_groups.mjs` | fuzzes host grouping, the System PAC and DNR rules with hostile hosts and masks; no browser | `node tools/fuzz_groups.mjs [seeds runs steps]` |
+| `tools/check_netlog.py` | finds direct connections that must not happen, in a NetLog recorded at `chrome://net-export`; the backup comes from **Export** in Options | `python3 tools/check_netlog.py netlog.json --backup rootpac-backup.json` |
+| `tools/make_icons.py` | rasterizes the PNG icons from `icons/icon.svg` (needs Playwright) | `python3 tools/make_icons.py` |
 
 ### Layout
 
@@ -93,7 +88,7 @@ src/offscreen/       offscreen document bridging to the sandbox
 src/ui/              popup, options, System PAC viewer
 vendor/              acorn, Chromium's PAC library, Public Suffix List
 test/                unit tests and fixtures
-tools/               Chromium checks, fuzzer, icon generator
+tools/               smoke test, fuzzer, NetLog check, icon generator
 docs/USER-GUIDE.md   user guide
 ```
 
