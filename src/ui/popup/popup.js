@@ -41,6 +41,12 @@ function showState(state, tabId) {
     });
     return button;
   };
+  if (state.proxyError !== null && state.proxyError !== undefined) {
+    const { count } = state.proxyError;
+    const row = stat(count, `request${plural(count)} failed at the proxy`, "failed");
+    row.append(reload());
+    box.append(row);
+  }
   if (state.incomplete) {
     const row = element("div", "stat learned");
     row.append(element("span", "label", "Loaded before protection was ready — part of the page was blocked"), reload());

@@ -362,6 +362,10 @@ input[type="search"]:focus {
   color: var(--accent);
 }
 
+.stat.failed .num {
+  color: var(--warn-fg);
+}
+
 .stat.total {
   margin-top: 8px;
   padding-top: 10px;
