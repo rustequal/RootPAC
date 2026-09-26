@@ -2,7 +2,8 @@
 
 export const CATEGORIES = {
   errors: new Set(["proxyFailure", "proxyError", "requestError", "incomplete", "learnError", "applyError", "startupError"]),
-  learning: new Set(["navigation", "blocked", "reported", "learned", "skipped"]),
+  learning: new Set(["blocked", "reported", "learned", "skipped"]),
+  pages: new Set(["navigation"]),
   state: new Set(["protection", "command", "log", "lifecycle"]),
 };
 

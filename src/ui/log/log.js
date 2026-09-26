@@ -32,9 +32,8 @@ const textOf = (entry) => {
 
 async function showBanners() {
   const { logEnabled } = await readLocal(["logEnabled"]);
-  const zone = element("p", "banner info", `Times are local: ${timeZone()}.`);
   if (logEnabled === true) {
-    banners.replaceChildren(zone);
+    banners.replaceChildren();
     return;
   }
   const off = element("p", "banner", "Recording is off. Turn on “Record a diagnostic log” in ");
@@ -42,7 +41,7 @@ async function showBanners() {
   link.href = "../options/options.html";
   link.target = "_blank";
   off.append(link, ".");
-  banners.replaceChildren(off, zone);
+  banners.replaceChildren(off);
 }
 
 function renderFailures() {
