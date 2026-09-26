@@ -63,6 +63,11 @@ Chrome reads an unpacked extension directly from that folder, and the extension 
 
 Requires Node.js 22 or later. No dependencies.
 
+Rules:
+
+- **Push only to `main`.** Do not create new branches: every change is committed and pushed straight to `main`.
+- **Always deliver a ZIP archive.** Every change ends with a ZIP of the extension (`rootpac-<version>.zip` with a single `rootpac/` folder inside), ready for **Load unpacked**. It is built from the committed tree: `git archive --format=zip --prefix=rootpac/ -o rootpac-<version>.zip HEAD`.
+
 ```sh
 npm test
 ```
