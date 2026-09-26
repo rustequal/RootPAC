@@ -352,7 +352,6 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
         const mask = learning(state) && host !== null ? rootOf(host, state.analysis.roots) : null;
         if (mask === null) return;
         track(details, { main: true, url: details.url });
-        if (log.on) log.add("navigation", { host, root: mask, url: details.url, tabId: details.tabId });
         return;
       }
       const host = hostFromUrl(details.url);
@@ -448,9 +447,16 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
       if (log.on) log.add("incomplete", { host: entry.main ? hostFromUrl(entry.url) : entry.host, url: details.url, tabId: entry.tabId });
     },
 
-    onCommitted({ tabId, frameId, url, documentLifecycle }) {
+    // Logged at commit rather than at the request: a page restored from the back/forward cache, activated from a
+    // prerender or answered by the site's service worker commits without a main_frame request the learner sees.
+    onCommitted({ tabId, frameId, url, documentLifecycle, transitionType }) {
       if (frameId !== 0 || tabId < 0 || documentLifecycle === "prerender") return;
       resetTab(tabId, url);
+      if (!log.on) return;
+      const host = hostFromUrl(url);
+      const { analysis } = store.state;
+      const mask = host === null || analysis === null ? null : rootOf(host, analysis.roots);
+      if (mask !== null) log.add("navigation", { host, root: mask, url, tabId, transition: transitionType ?? null });
     },
 
     onReplaced(addedTabId, removedTabId) {

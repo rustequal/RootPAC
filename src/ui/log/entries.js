@@ -79,7 +79,7 @@ function lifecycleText({ event, version, previousVersion }) {
 export function entryText(entry) {
   switch (entry.kind) {
     case "navigation":
-      return `Root page ${entry.host} [${entry.root}]${tab(entry)}`;
+      return `Root page ${entry.host} [${entry.root}]${entry.transition ? ` · ${entry.transition}` : ""}${tab(entry)}`;
     case "blocked":
       return `New host ${entry.host} blocked and queued for learning into ${entry.root} · ${entry.type}${entry.initiator ? ` from ${entry.initiator}` : ""}${tab(entry)}`;
     case "reported":

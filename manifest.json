@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "RootPAC",
-  "version": "1.0.14",
+  "version": "1.0.15",
   "description": "Routes a site and every host it loads through your proxy by learning them into a generated PAC.",
   "minimum_chrome_version": "145",
   "permissions": [

@@ -148,9 +148,22 @@ test("proxy failures are grouped by host, most frequent first", () => {
   assert.equal(rows[0].errors.size, 2);
 });
 
-test("times are shown as local 24-hour YYYY-MM-DD HH:MM:SS", () => {
+test("times follow Chrome's own format", () => {
   const time = new Date(2026, 8, 26, 16, 22, 19, 7).getTime();
-  assert.equal(formatTime(time), "2026-09-26 16:22:19");
-  assert.equal(formatTime(time, { milliseconds: true }), "2026-09-26 16:22:19.007");
-  assert.equal(formatTime(new Date(2026, 0, 2, 3, 4, 5).getTime()), "2026-01-02 03:04:05");
+  assert.equal(formatTime(time), new Date(time).toLocaleString());
+  assert.match(formatTime(time, { milliseconds: true }), /19[.,]007/);
+});
+
+test("a root page is logged when it commits, even without a main_frame request", async () => {
+  const { log, timers, entries } = memoryLog();
+  const { learner } = await setup(log);
+  log.set(true);
+  learner.onCommitted({ tabId: TAB, frameId: 0, url: "https://www.instagram.com/direct/#inbox", documentLifecycle: "active", transitionType: "typed" });
+  learner.onCommitted({ tabId: TAB, frameId: 0, url: "https://example.com/", documentLifecycle: "active", transitionType: "link" });
+  learner.onCommitted({ tabId: TAB, frameId: 0, url: "https://www.instagram.com/", documentLifecycle: "prerender" });
+  for (const flush of timers.splice(0)) await flush();
+  assert.deepEqual(entries(), [
+    { time: 42, kind: "navigation", host: "www.instagram.com", root: "instagram.com", url: "https://www.instagram.com/direct/#inbox", tabId: TAB, transition: "typed" },
+  ]);
+  assert.equal(entryText(entries()[0]), "Root page www.instagram.com [instagram.com] · typed · tab 7");
 });

@@ -145,7 +145,8 @@ document.getElementById("export").addEventListener("click", () => {
     const { id, time, kind, ...fields } = entry;
     return `${formatTime(time, { milliseconds: true })}\t${kind}\t${textOf(entry)}\t${JSON.stringify(fields)}`;
   });
-  const stamp = formatTime(Date.now()).replace(/[: ]/g, "-");
+  const now = new Date();
+  const stamp = [now.getFullYear(), now.getMonth() + 1, now.getDate(), now.getHours(), now.getMinutes(), now.getSeconds()].map((part) => String(part).padStart(2, "0")).join("-");
   download(`rootpac-log-${stamp}.txt`, `RootPAC diagnostic log, times in ${timeZone()}\n${lines.join("\n")}\n`, "text/plain");
 });
 
