@@ -40,8 +40,22 @@ export function proxyErrorText(record, appliedPac, userPac) {
   return record.details === undefined || record.details === "" ? record.error : `${record.error}: ${record.details}`;
 }
 
-export function formatTime(time) {
-  return new Date(time).toLocaleString();
+const pad = (value, width = 2) => String(value).padStart(width, "0");
+
+// Chrome formats toLocaleString() by its UI language (en-US gives 9/26/2026, 4:22:19 PM), not by the regional format
+// of the OS, which extensions cannot read. Times are shown in the local time zone as YYYY-MM-DD HH:MM:SS instead.
+export function formatTime(time, { milliseconds = false } = {}) {
+  const date = new Date(time);
+  const day = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  const clock = `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+  return `${day} ${clock}${milliseconds ? `.${pad(date.getMilliseconds(), 3)}` : ""}`;
+}
+
+export function timeZone(time = Date.now()) {
+  const offset = -new Date(time).getTimezoneOffset();
+  const hours = Math.floor(Math.abs(offset) / 60);
+  const name = Intl.DateTimeFormat().resolvedOptions().timeZone ?? "local time";
+  return `${name}, UTC${offset < 0 ? "−" : "+"}${pad(hours)}:${pad(Math.abs(offset) % 60)}`;
 }
 
 export function element(tag, className, text) {

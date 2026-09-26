@@ -115,5 +115,11 @@ document.getElementById("viewer").addEventListener("click", () => {
   chrome.tabs.create({ url: chrome.runtime.getURL("src/ui/viewer/viewer.html") });
 });
 
-onStored(refresh);
+document.getElementById("log").addEventListener("click", () => {
+  chrome.tabs.create({ url: chrome.runtime.getURL("src/ui/log/log.html") });
+});
+
+onStored((changes) => {
+  if (Object.keys(changes).some((key) => key !== "logEnabled")) refresh();
+});
 refresh();

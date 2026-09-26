@@ -10,6 +10,8 @@ const result = document.getElementById("result");
 const cancel = document.getElementById("cancel");
 const backupStatus = document.getElementById("backupStatus");
 const file = document.getElementById("file");
+const logEnabled = document.getElementById("logEnabled");
+const logStatus = document.getElementById("logStatus");
 
 let saved = "";
 let checking = false;
@@ -167,8 +169,25 @@ window.addEventListener("keydown", (event) => {
   save();
 });
 
+async function loadLogSetting() {
+  const { logEnabled: enabled } = await readLocal(["logEnabled"]);
+  logEnabled.checked = enabled === true;
+}
+
+logEnabled.addEventListener("change", () => {
+  logStatus.textContent = "";
+  chrome.storage.local.set({ logEnabled: logEnabled.checked }).catch((error) => {
+    logStatus.textContent = error.message;
+    logStatus.className = "error";
+    loadLogSetting();
+  });
+});
+
 onStored((changes, area) => {
   if (area === "local" && ("userPac" in changes || "userPacErrors" in changes || "analysis" in changes)) load(false);
+  if (area === "local" && "logEnabled" in changes) loadLogSetting();
 });
+
+loadLogSetting();
 
 load(true);

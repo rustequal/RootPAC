@@ -1,8 +1,9 @@
 import { buildRules, closedPolicy, intersectPolicies, policyOf } from "../core/rules.js";
+import { NO_LOG } from "./log.js";
 
 const configured = (state) => state.enabled && state.appliedPac !== null;
 
-export function createEngine({ store, proxy, dnr, session, now = Date.now }) {
+export function createEngine({ store, proxy, dnr, session, now = Date.now, log = NO_LOG }) {
   let effective = null;
   let armed = null;
   let openedAt = null;
@@ -14,6 +15,7 @@ export function createEngine({ store, proxy, dnr, session, now = Date.now }) {
 
   const arm = async (value, since = null) => {
     if (armed === value) return;
+    if (log.on) log.add("protection", { armed: value });
     armed = value;
     openedAt = value ? (since ?? now()) : null;
     await session.set({ armed, openedAt });
@@ -64,6 +66,7 @@ export function createEngine({ store, proxy, dnr, session, now = Date.now }) {
       try {
         return await settle(next);
       } catch (error) {
+        if (log.on) log.add("applyError", { message: error instanceof Error ? error.message : String(error) });
         await store
           .commit(prev)
           .then(() => settle(prev))

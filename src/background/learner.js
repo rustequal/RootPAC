@@ -1,12 +1,15 @@
 import { buildSystemPac } from "../core/build.js";
 import { aggregateGroups, hostIndex, mergeGroups, mergeSeen } from "../core/groups.js";
 import { firstMatch } from "../core/glob.js";
-import { hostFromUrl, isLearnable, learnedOwner, rootOf } from "../core/hosts.js";
+import { hostFromUrl, isLearnable, isLearnableName, learnedOwner, rootOf, underDeny } from "../core/hosts.js";
 import { reportEndpointHosts } from "../core/reporting.js";
+import { NO_LOG } from "./log.js";
 
 const MAX_LOADED = 500;
 const MAX_TRACKED = 2000;
 const BLOCKED = "net::ERR_BLOCKED_BY_CLIENT";
+const ABORTED = "net::ERR_ABORTED";
+const MAX_SKIPPED = 1000;
 const PROXY_FAILURE = /^net::ERR_(?:PROXY_|SOCKS_|TUNNEL_|MANDATORY_PROXY_|PAC_|HTTPS_PROXY_|UNEXPECTED_PROXY_)/;
 const MANDATORY = "net::ERR_MANDATORY_PROXY_CONFIGURATION_FAILED";
 const PAC_FAILED = "net::ERR_PAC_SCRIPT_FAILED";
@@ -17,7 +20,7 @@ const IGNORED_LIFECYCLES = new Set(["prerender", "cached", "pending_deletion"]);
 
 const blankTab = (host) => ({ host, navigation: 0, newHosts: 0, loaded: new Set(), proxied: new Set(), loading: false, incomplete: false, proxyError: null });
 
-export function createLearner({ store, engine, session, tabs: browserTabs, now }) {
+export function createLearner({ store, engine, session, tabs: browserTabs, now, log = NO_LOG }) {
   const tabs = new Map();
   const tracked = new Map();
   const pending = new Map();
@@ -30,6 +33,7 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now }
   let writing = false;
   let pacFailure = null;
   const awaitingPac = new Map();
+  const skipped = new Set();
 
   const indexOf = (groups) => {
     if (indexed.groups !== groups) indexed = { groups, index: hostIndex(groups) };
@@ -165,6 +169,50 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now }
 
   const learning = (state) => state.enabled && state.analysis !== null && state.userPacErrors === null;
 
+  // The helpers below only run with the diagnostic log on.
+  const refusal = (host, { deny, bypass }) => {
+    if (!isLearnableName(host)) return "not a learnable name";
+    if (underDeny(host, deny)) return "deny";
+    return firstMatch(host, bypass) !== null ? "bypass" : "covers a bypass mask";
+  };
+
+  const logSkipped = (host, mask, reason, tabId) => {
+    const key = `${mask} ${host}`;
+    if (skipped.has(key)) return;
+    if (skipped.size >= MAX_SKIPPED) skipped.clear();
+    skipped.add(key);
+    log.add("skipped", { host, root: mask, reason, tabId });
+  };
+
+  const routeOf = (host) => {
+    const state = store.state;
+    if (host === null || state.analysis === null) return {};
+    const root = rootOf(host, state.analysis.roots);
+    if (root !== null) return { route: "root", group: root };
+    const index = indexOf(state.groups);
+    const learned = learnedOwner(host, index, store.psl);
+    if (learned !== null) return { route: "learned", group: index.get(learned).join(", "), entry: learned };
+    return { route: firstMatch(host, state.analysis.bypass) !== null ? "bypass" : "user PAC" };
+  };
+
+  const logFailure = (details, entry) => {
+    const host = hostFromUrl(details.url);
+    const tabId = details.tabId >= 0 ? details.tabId : null;
+    log.add(PROXY_FAILURE.test(details.error ?? "") ? "proxyFailure" : "requestError", {
+      host,
+      url: details.url,
+      error: details.error,
+      type: details.type,
+      method: details.method,
+      tabId,
+      tabHost: tabId === null ? null : (tabs.get(tabId)?.host ?? null),
+      initiator: details.initiator ?? null,
+      ip: details.ip ?? null,
+      tracked: entry !== null,
+      ...routeOf(host),
+    });
+  };
+
   const accept = (state, learn) => {
     const index = indexOf(state.groups);
     const accepted = new Map();
@@ -189,6 +237,9 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now }
     const { groups, seen: aggregatedSeen } = aggregateGroups(mergeGroups(state.groups, accepted, time), nextSeen, state.analysis, store.psl);
     await engine.commit({ ...state, groups, seen: aggregatedSeen, appliedPac: buildSystemPac(state.userPac, groups, store.psl) });
     count(accepted);
+    if (log.on) {
+      for (const [host, { mask, rootHost, tabId }] of accepted) log.add("learned", { host, root: mask, rootHost, tabId });
+    }
   };
 
   const commitSafely = async (learn, seen) => {
@@ -220,6 +271,7 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now }
         const failure = await commitSafely(learn, seen);
         if (failure !== null) {
           failed = true;
+          if (log.on) log.add("learnError", { message: failure instanceof Error ? failure.message : String(failure) });
           persist({ lastLearnError: { time: now(), message: failure instanceof Error ? failure.message : String(failure) } });
         } else if (failed) {
           failed = false;
@@ -297,7 +349,10 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now }
         if (details.tabId < 0) return;
         startLoading(details.tabId);
         const host = hostFromUrl(details.url);
-        if (learning(state) && host !== null && rootOf(host, state.analysis.roots) !== null) track(details, { main: true, url: details.url });
+        const mask = learning(state) && host !== null ? rootOf(host, state.analysis.roots) : null;
+        if (mask === null) return;
+        track(details, { main: true, url: details.url });
+        if (log.on) log.add("navigation", { host, root: mask, url: details.url, tabId: details.tabId });
         return;
       }
       const host = hostFromUrl(details.url);
@@ -320,7 +375,12 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now }
         return;
       }
       const source = attribute(details, roots);
-      if (source === null || !enqueue(host, source, state, index)) return;
+      if (source === null) return;
+      if (!enqueue(host, source, state, index)) {
+        if (log.on && !underRoot && !pending.has(host)) logSkipped(host, source.mask, refusal(host, state.analysis), source.tabId);
+        return;
+      }
+      if (log.on) log.add("blocked", { host, root: source.mask, type: details.type, url: details.url, initiator: details.initiator ?? null, tabId: source.tabId });
       notify(source.tabId);
       schedule();
     },
@@ -343,7 +403,9 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now }
       const index = indexOf(state.groups);
       const endpoint = { mask: source.mask, rootHost: source.rootHost, tabId: null, navigation: 0 };
       const added = hosts.filter((host) => enqueue(host, endpoint, state, index));
-      if (added.length > 0) schedule();
+      if (added.length === 0) return;
+      if (log.on) for (const host of added) log.add("reported", { host, root: source.mask, url: details.url });
+      schedule();
     },
 
     onResponse(details) {
@@ -352,7 +414,8 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now }
       markLoaded(entry.tabId, entry.host, entry.via === "proxy");
     },
 
-    onProxyError({ error, details }) {
+    onProxyError({ error, details, fatal }) {
+      if (log.on) log.add("proxyError", { error, details: details ?? "", fatal: fatal === true });
       if (error !== PAC_FAILED) return;
       pacFailure = { time: now(), error, details: details ?? "" };
       for (const [tabId, awaiting] of awaitingPac) {
@@ -366,6 +429,9 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now }
 
     onError(details) {
       const entry = settled(details);
+      if (log.on && details.error !== BLOCKED && (PROXY_FAILURE.test(details.error ?? "") || (entry !== null && details.error !== ABORTED))) {
+        logFailure(details, entry);
+      }
       if (entry !== null && PROXY_FAILURE.test(details.error ?? "")) {
         failProxy(entry, details);
         return;
@@ -376,7 +442,10 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now }
         markIncomplete(entry.tabId);
       } else if (current(entry.tabId, entry.navigation)) {
         markIncomplete(entry.tabId);
+      } else {
+        return;
       }
+      if (log.on) log.add("incomplete", { host: entry.main ? hostFromUrl(entry.url) : entry.host, url: details.url, tabId: entry.tabId });
     },
 
     onCommitted({ tabId, frameId, url, documentLifecycle }) {

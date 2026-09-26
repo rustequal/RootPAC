@@ -1,0 +1,26 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>RootPAC — Diagnostic log</title>
+<link rel="stylesheet" href="../shared/ui.css">
+<body style="max-width: 1200px; margin: 0 auto">
+<div id="head"></div>
+<div id="banners" class="messages"></div>
+<h2 style="margin-top: 0">Proxy failures by host</h2>
+<div id="failures"></div>
+<h2>Events</h2>
+<div class="row">
+  <select id="category">
+    <option value="all">All events</option>
+    <option value="errors">Errors</option>
+    <option value="learning">Learning</option>
+    <option value="state">State and configuration</option>
+  </select>
+  <input id="filter" type="search" placeholder="Filter by host or text" style="flex: 1; width: auto; min-width: 200px">
+  <button id="export">Export</button>
+  <button id="clear">Clear</button>
+</div>
+<p id="summary" class="muted"></p>
+<div id="events"></div>
+<p><a href="../options/options.html" target="_blank">Options</a></p>
+<script type="module" src="log.js"></script>
+</body>

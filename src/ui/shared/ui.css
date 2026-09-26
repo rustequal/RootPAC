@@ -376,3 +376,56 @@ input[type="search"]:focus {
 .stat.total .label {
   color: var(--muted);
 }
+
+label.check {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  cursor: pointer;
+}
+
+label.check input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+select {
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--fg);
+  font: inherit;
+  font-size: 14px;
+}
+
+td.clickable {
+  cursor: pointer;
+}
+
+td.clickable:hover {
+  color: var(--accent);
+}
+
+td.time {
+  width: 1%;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+
+td.event {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  word-break: break-all;
+}
+
+tr.level-error td.event {
+  color: var(--error);
+}
+
+tr.level-warn td.event {
+  color: var(--warn-fg);
+}

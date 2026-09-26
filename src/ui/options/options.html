@@ -22,6 +22,12 @@
   <input id="file" type="file" accept="application/json" hidden>
   <span id="backupStatus" class="muted"></span>
 </div>
+<h2>Diagnostics</h2>
+<div class="row">
+  <label class="check"><input id="logEnabled" type="checkbox"> Record a diagnostic log</label>
+  <span id="logStatus" class="muted"></span>
+</div>
+<p class="muted">Records what the extension does: pages of root sites, new hosts blocked and learned, hosts left out of learning, proxy failures with the host that failed, errors of requests from root sites, protection state and configuration changes. Keeps the last 5000 events in the browser; nothing is recorded while it is off. <a id="log" href="../log/log.html" target="_blank">Open the log</a></p>
 <p class="muted">Ctrl+S saves. Tab inserts two spaces. Turning the proxy off is done from chrome://extensions.</p>
 <p><a id="viewer" href="../viewer/viewer.html" target="_blank">System PAC viewer</a></p>
 <script type="module" src="options.js"></script>

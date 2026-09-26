@@ -1,6 +1,7 @@
 import { analyzeUserPac } from "../core/analyze.js";
 import { buildSystemPac } from "../core/build.js";
 import { adoptLegacyGroups, aggregateGroups, pruneSeen, reconcileGroups } from "../core/groups.js";
+import { LOG_SETTING } from "./log.js";
 
 export const SCHEMA_VERSION = 1;
 
@@ -8,11 +9,13 @@ const GROUP = "group:";
 const SEEN = "seen:";
 const VERIFIED = "stateVerified";
 const SCALARS = ["enabled", "userPac", "analysis", "appliedPac", "userPacErrors"];
+// Settings of the pages that are not part of the routing state; the store leaves them alone.
+const SETTINGS = new Set([LOG_SETTING]);
 
 function decode(items) {
   const state = { enabled: true, userPac: null, analysis: null, appliedPac: null, userPacErrors: null, groups: {}, seen: {} };
   for (const [key, value] of Object.entries(items)) {
-    if (key === "schemaVersion") continue;
+    if (key === "schemaVersion" || SETTINGS.has(key)) continue;
     if (SCALARS.includes(key)) state[key] = value;
     else if (key.startsWith(GROUP)) state.groups[key.slice(GROUP.length)] = value;
     else if (key.startsWith(SEEN)) state.seen[key.slice(SEEN.length)] = value;
@@ -120,7 +123,7 @@ export class Store {
     this.#psl = psl;
     const [items, { [VERIFIED]: verified }] = await Promise.all([this.#area.get(null), this.#session.get(VERIFIED)]);
     this.#verified = verified === true;
-    if (Object.keys(items).length === 0) {
+    if (Object.keys(items).every((key) => SETTINGS.has(key))) {
       this.#state = decode({});
       await this.#mark(false);
       await this.#area.set({ schemaVersion: SCHEMA_VERSION, enabled: this.#state.enabled });

@@ -4,6 +4,7 @@ import { buildSystemPac } from "../core/build.js";
 import { rootOf } from "../core/hosts.js";
 import { adoptLegacyGroups, aggregateGroups, pruneSeen, reconcileGroups } from "../core/groups.js";
 import { trialErrors, trialPlan } from "../core/trial.js";
+import { NO_LOG } from "./log.js";
 
 function requireString(value, name) {
   if (typeof value !== "string") throw new TypeError(`${name} must be a string`);
@@ -20,7 +21,7 @@ function requireValidUserPac(state) {
 }
 
 
-export function createCommands({ store, engine, checker, learner }) {
+export function createCommands({ store, engine, checker, learner, log = NO_LOG }) {
   const normalize = (groups, seen, analysis) => {
     const adopted = adoptLegacyGroups(groups, seen, analysis.roots);
     const reconciled = reconcileGroups(adopted.groups, analysis);
@@ -119,16 +120,32 @@ export function createCommands({ store, engine, checker, learner }) {
 
   const handlers = { saveUserPac, setEnabled, removeHost, clearGroup, getTabState, exportState, importState, cancelCheck };
 
+  // What a command changed, for the diagnostic log; read-only commands are not logged.
+  const userPac = (message, response) => (response.ok ? { roots: response.analysis.roots.length } : { problems: response.errors?.length ?? 0, error: response.error });
+  const describe = {
+    saveUserPac: userPac,
+    importState: userPac,
+    setEnabled: ({ enabled }, response) => ({ enabled, error: response.error }),
+    removeHost: ({ mask, host }, response) => ({ root: mask, host, error: response.error }),
+    clearGroup: ({ mask }, response) => ({ root: mask, error: response.error }),
+  };
+
+  const run = async (handler, message) => {
+    try {
+      return await handler(message);
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  };
+
   return {
     async dispatch(message) {
       const type = message !== null && typeof message === "object" ? message.type : undefined;
       const handler = typeof type === "string" && Object.hasOwn(handlers, type) ? handlers[type] : null;
       if (handler === null) return { ok: false, error: `Unknown command ${JSON.stringify(type)}` };
-      try {
-        return await handler(message);
-      } catch (error) {
-        return { ok: false, error: error instanceof Error ? error.message : String(error) };
-      }
+      const response = await run(handler, message);
+      if (log.on && Object.hasOwn(describe, type)) log.add("command", { command: type, ok: response.ok, ...describe[type](message, response) });
+      return response;
     },
   };
 }

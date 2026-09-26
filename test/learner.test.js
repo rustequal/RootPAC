@@ -13,7 +13,7 @@ import { fixture, loadPac, vmChecker, PSL } from "./support.js";
 const TAB = 7;
 const NO_TABS = { query: async () => [] };
 
-async function setup({ session = new FakeArea(), enabled = true, now = null } = {}) {
+async function setup({ session = new FakeArea(), enabled = true, now = null, log } = {}) {
   const area = new FakeArea();
   const store = new Store(area, new FakeArea());
   await store.load(PSL);
@@ -23,7 +23,7 @@ async function setup({ session = new FakeArea(), enabled = true, now = null } = 
   await commands.dispatch({ type: "saveUserPac", text: fixture("user.pac") });
   if (!enabled) await commands.dispatch({ type: "setEnabled", enabled: false });
   let time = 1000;
-  const learner = createLearner({ store, engine, session, tabs: NO_TABS, now: now ?? (() => time++) });
+  const learner = createLearner({ store, engine, session, tabs: NO_TABS, now: now ?? (() => time++), log });
   await learner.restore();
   browser.journal.clear();
   area.calls.length = 0;
