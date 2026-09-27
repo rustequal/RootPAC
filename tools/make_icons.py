@@ -13,17 +13,25 @@ COLORS = {
     "off": ("#5c6067", "#9aa0a6"),
 }
 SIZES = {"brand": (16, 32, 48, 128), "active": (16, 32), "pending": (16, 32), "idle": (16, 32), "off": (16, 32)}
+# Chrome Web Store: a 128x128 icon holds a 96x96 image with 16 px transparent margins.
+PADDED = {("brand", 128)}
 
 
-def svg(background, dot, size):
+def svg(background, dot, size, padded=False):
     node = size >= 32
-    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" viewBox="0 0 32 32">
-  <rect x="0" y="0" width="32" height="32" rx="8" fill="{background}"/>
+    body = f"""<rect x="0" y="0" width="32" height="32" rx="8" fill="{background}"/>
   <g transform="translate(-0.6 -2.4) scale(0.92)">
     <path d="M9.5 23.5V8.5h6.2a4.1 4.1 0 0 1 0 8.2h-2.4l5 6.8" fill="none" stroke="#ffffff"
           stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
   </g>
-  {f'<circle cx="24.6" cy="8.6" r="2.5" fill="{dot}"/>' if node else ""}
+  {f'<circle cx="24.6" cy="8.6" r="2.5" fill="{dot}"/>' if node else ""}"""
+    if padded:
+        # 16 px of 128 = 4 units of the 32-unit viewBox; the image shrinks to 24 units (96 px).
+        body = f"""<g transform="translate(4 4) scale(0.75)">
+  {body}
+  </g>"""
+    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" viewBox="0 0 32 32">
+  {body}
 </svg>"""
 
 
@@ -36,7 +44,7 @@ async def main():
             for size in SIZES[name]:
                 await page.set_viewport_size({"width": size, "height": size})
                 await page.set_content(
-                    f'<body style="margin:0">{svg(background, dot, size)}</body>',
+                    f'<body style="margin:0">{svg(background, dot, size, (name, size) in PADDED)}</body>',
                     wait_until="load",
                 )
                 await page.screenshot(path=ICONS / f"{name}-{size}.png", omit_background=True)
