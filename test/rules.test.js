@@ -133,13 +133,13 @@ test("buildRules keeps blocks dynamic and every allowance in session rules", () 
       id: RULE_IDS.hosts,
       priority: 2,
       action: { type: "allow" },
-      condition: { topDomains: ["instagram.com"], excludedInitiatorDomains: ["instagram.com"], requestDomains: ["edge-chat.facebook.com", "static.cdninstagram.com"] },
+      condition: { topDomains: ["instagram.com"], requestDomains: ["edge-chat.facebook.com", "static.cdninstagram.com"] },
     },
     {
       id: RULE_IDS.hosts + 1,
       priority: 2,
       action: { type: "allow" },
-      condition: { initiatorDomains: ["instagram.com"], requestDomains: ["edge-chat.facebook.com", "static.cdninstagram.com"] },
+      condition: { initiatorDomains: ["instagram.com"], excludedTopDomains: ["instagram.com"], requestDomains: ["edge-chat.facebook.com", "static.cdninstagram.com"] },
     },
   ]);
 });
@@ -194,7 +194,7 @@ test("a record learned by roots on the same proxy is allowed for each of them", 
     [["b.com"], ["cdn.net", "img.org"]],
     [["b.com"], ["cdn.net", "img.org"]],
   ]);
-  assert.deepEqual(rules[0].condition.excludedInitiatorDomains, ["a.com", "b.com"]);
+  assert.deepEqual(rules[1].condition.excludedTopDomains, ["a.com", "b.com"]);
 });
 
 test("a record learned by roots on different proxies is allowed only for the root whose proxy routes it", () => {
@@ -243,7 +243,6 @@ test("exact public suffix records are allowed by an exact regular expression and
   const { session } = buildRules(policy);
   assert.deepEqual(session.find((rule) => rule.id === RULE_IDS.hosts + 1).condition, {
     topDomains: ["instagram.com"],
-    excludedInitiatorDomains: ["instagram.com"],
     regexFilter: "^[a-z]+://github\\.io\\.?(?::[0-9]+)?/",
   });
   const other = { ...policy, contexts: [context("instagram.com", { allow: ["cdn.net"] })] };

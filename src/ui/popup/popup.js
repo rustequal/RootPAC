@@ -51,7 +51,8 @@ function conflictBanner(conflicts) {
   }
   const { proxy } = conflicts[0];
   const own = proxy === null ? "" : `This root uses ${proxy}. `;
-  const hint = `${own}A PAC sees the host, not the tab, so a host has one proxy for all roots: use one proxy for these roots, or remove the host from a group in System PAC.`;
+  const from = owners.size === 1 ? `${conflicts[0].owner}'s group` : "the group of the root that routes it";
+  const hint = `${own}A PAC sees the host, not the tab, so a host has one proxy for all roots: use one proxy for these roots, or remove the host from ${from} in System PAC to route it here.`;
   node.title = hint;
   node.append(list, element("div", "hint", hint));
   banners.append(node);

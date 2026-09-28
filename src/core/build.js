@@ -2,6 +2,7 @@ import { analyzeUserPac, isValidRoot, parseScript } from "./analyze.js";
 import { firstMatch } from "./glob.js";
 import { covers, isLearnableName, maskDomain, rootOf } from "./hosts.js";
 import { USER_OPEN, userPacLine } from "./pacline.js";
+import { routedGroups } from "./routes.js";
 
 export { userPacLine };
 
@@ -359,11 +360,13 @@ export function buildSystemPac(userPac, groups, psl) {
   checkGroups(groups, analysis);
   const masks = Object.keys(groups).sort();
   const names = assignNames(masks);
+  // A record held by several groups is routed by one of them; only that group carries it into the PAC.
+  const routed = routedGroups(groups);
   const bypass = [...new Set(analysis.bypass)].sort();
   const literals = (items) => items.map((item) => JSON.stringify(item));
   const text = [
     ...HEADER,
-    ...masks.flatMap((mask) => renderGroup(mask, names.get(mask), groups[mask], psl)),
+    ...masks.flatMap((mask) => renderGroup(mask, names.get(mask), routed[mask], psl)),
     ...renderArray("__GROUPS", masks.map((mask) => names.get(mask))),
     ...renderArray("__ROOTS", literals(masks)),
     ...renderArray("__BYPASS_HOSTS", literals(bypass.filter((mask) => !mask.startsWith("*.")))),

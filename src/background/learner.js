@@ -3,7 +3,7 @@ import { aggregateGroups, hostIndex, mergeGroups, mergeSeen } from "../core/grou
 import { firstMatch } from "../core/glob.js";
 import { hostFromUrl, isLearnable, isLearnableName, learnedOwner, rootOf, underDeny } from "../core/hosts.js";
 import { reportEndpointHosts } from "../core/reporting.js";
-import { CONFLICT, SAME, answersOf, verdict } from "../core/routes.js";
+import { CONFLICT, SAME, answersOf, ownerOf, verdict } from "../core/routes.js";
 import { NO_LOG } from "./log.js";
 
 const MAX_LOADED = 500;
@@ -12,7 +12,7 @@ const BLOCKED = "net::ERR_BLOCKED_BY_CLIENT";
 const ABORTED = "net::ERR_ABORTED";
 const MAX_LOGGED = 1000;
 const MAX_CONFLICTS = 50;
-const MAX_ORIGINS = 256;
+const MAX_CACHED = 1000;
 const PROXY_FAILURE = /^net::ERR_(?:PROXY_|SOCKS_|TUNNEL_|MANDATORY_PROXY_|PAC_|HTTPS_PROXY_|UNEXPECTED_PROXY_)/;
 const MANDATORY = "net::ERR_MANDATORY_PROXY_CONFIGURATION_FAILED";
 const PAC_FAILED = "net::ERR_PAC_SCRIPT_FAILED";
@@ -38,8 +38,8 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
   const awaitingPac = new Map();
   const skipped = new Set();
   const conflicted = new Set();
-  let answered = { state: null, answers: {} };
-  let origins = { roots: null, byOrigin: new Map() };
+  let answered = { state: null, answers: {}, routes: new Map() };
+  let rooted = { roots: null, hosts: new Map(), origins: new Map() };
 
   // Every group's records, and each root's own ones on demand; rebuilt only when the groups change.
   const indexOf = (groups) => {
@@ -57,15 +57,21 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
     return own;
   };
 
-  const answersOfState = (state) => {
-    if (answered.state !== state) answered = { state, answers: answersOf(state) };
-    return answered.answers;
+  // What follows from the state alone is worked out once per state: every learned request asks for it.
+  const answeredFor = (state) => {
+    if (answered.state !== state) answered = { state, answers: answersOf(state), routes: new Map() };
+    return answered;
   };
+
+  const answersOfState = (state) => answeredFor(state).answers;
 
   // The group whose proxy carries a learned record, and whether the root may use it (core/routes.js).
   const routeFor = (entry, mask, state) => {
-    const owner = indexOf(state.groups).get(entry)[0];
-    return { entry, owner, verdict: verdict(mask, owner, answersOfState(state)) };
+    const { answers, routes } = answeredFor(state);
+    return cached(routes, keyOf(mask, entry), () => {
+      const owner = ownerOf(state.groups, indexOf(state.groups).get(entry), entry);
+      return { entry, owner, verdict: verdict(mask, owner, answers) };
+    });
   };
 
   // What a root learns for a host it does not know yet. Each root learns every host it needs itself, even one another
@@ -79,6 +85,17 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
   };
 
   const keyOf = (mask, host) => `${mask} ${host}`;
+
+  // A bounded memo for answers that are asked on every request.
+  const cached = (map, key, find) => {
+    let found = map.get(key);
+    if (found === undefined) {
+      if (map.size >= MAX_CACHED) map.clear();
+      found = find(key);
+      map.set(key, found);
+    }
+    return found;
+  };
 
   // Diagnostic events that would repeat on every request are logged once per key.
   const firstTime = (keys, key) => {
@@ -217,26 +234,30 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
     changed(tabId);
   };
 
-  // Pages make most of their requests from a handful of origins, so the root of each origin is kept at hand.
-  const originOf = (initiator, roots) => {
-    if (origins.roots !== roots || origins.byOrigin.size >= MAX_ORIGINS) origins = { roots, byOrigin: new Map() };
-    let found = origins.byOrigin.get(initiator);
-    if (found === undefined) {
-      const host = hostFromUrl(initiator);
-      found = { host, root: host === null ? null : rootOf(host, roots) };
-      origins.byOrigin.set(initiator, found);
-    }
-    return found;
+  // Pages make most of their requests from a handful of hosts and origins, so the root of each is kept at hand.
+  const rootsOf = (roots) => {
+    if (rooted.roots !== roots) rooted = { roots, hosts: new Map(), origins: new Map() };
+    return rooted;
   };
 
-  const attribute = ({ tabId, initiator }, roots) => {
+  const rootOfHost = (host, roots) => (host === null ? null : cached(rootsOf(roots).hosts, host, (name) => rootOf(name, roots)));
+
+  const originOf = (initiator, roots) => cached(rootsOf(roots).origins, initiator, (url) => hostFromUrl(url));
+
+  // A request belongs to the root of its tab's page: each root is on its own proxy, and a page is one site to its user,
+  // frames of other roots included. Only outside root pages, as a frame or a worker of a root, does it belong to the
+  // root of the origin that made it. The DNR rules scope each root's allowance the same way (core/rules.js). The top
+  // frame's requests name their page in their initiator; the tab's record, updated when a navigation commits, may
+  // still hold the previous page for the first requests of the next one, so only frames rely on it.
+  const attribute = ({ tabId, frameId, initiator }, roots) => {
     const inTab = tabId >= 0;
     const tab = inTab ? tabs.get(tabId) : undefined;
-    const { host: origin, root: byOrigin } = originOf(initiator, roots);
-    const rootHost = byOrigin !== null ? origin : (tab?.host ?? null);
-    const mask = byOrigin ?? (rootHost === null ? null : rootOf(rootHost, roots));
+    const origin = originOf(initiator, roots);
+    const page = frameId === 0 && origin !== null ? origin : (tab?.host ?? null);
+    const byPage = rootOfHost(page, roots);
+    const mask = byPage ?? rootOfHost(origin, roots);
     if (mask === null) return null;
-    return { mask, rootHost, tabId: inTab ? tabId : null, navigation: tab?.navigation ?? 0 };
+    return { mask, rootHost: byPage === null ? origin : page, tabId: inTab ? tabId : null, navigation: tab?.navigation ?? 0 };
   };
 
   const learning = (state) => state.enabled && state.analysis !== null && state.userPacErrors === null;
@@ -455,7 +476,7 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
       const underRoot = rootOf(host, roots) !== null;
       const learned = underRoot ? null : learnedOwner(host, index, store.psl);
       const tab = details.tabId >= 0 ? tabs.get(details.tabId) : undefined;
-      if (tab !== undefined && rootOf(tab.host ?? "", roots) !== null) {
+      if (tab !== undefined && rootOfHost(tab.host ?? null, roots) !== null) {
         const via = underRoot ? null : learned !== null ? "proxy" : firstMatch(host, bypass) !== null ? "direct" : undefined;
         if (via !== undefined) track(details, { host, via, navigation: tab.navigation });
       }

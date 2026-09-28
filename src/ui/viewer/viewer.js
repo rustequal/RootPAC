@@ -13,12 +13,17 @@ const open = new Set();
 
 // Which proxy a host goes through for this root: its own, another root's that is the same, or another root's that is
 // not, in which case the host is blocked for this root (a proxy conflict).
-function routeCell({ owner, verdict, ownerProxy } = {}) {
+function routeCell({ owner, verdict, ownerProxy } = {}, blocked = []) {
+  if (owner === undefined && blocked.length > 0) {
+    const cell = element("td", "warn", `own proxy · blocked for ${blocked.join(", ")}`);
+    cell.title = `A proxy conflict: ${blocked.join(", ")} learned this host too, but it goes through this root's proxy. Remove it here to hand the route to ${blocked[0]}.`;
+    return cell;
+  }
   if (owner === undefined) return element("td", "muted", "own proxy");
   if (verdict === "same") return element("td", "muted", `same proxy as ${owner}`);
   if (verdict === "unchecked") return element("td", "warn", `${owner} · proxies not checked yet · blocked here`);
   const cell = element("td", "error", `${owner}${ownerProxy === null ? "" : ` · ${ownerProxy}`} · blocked here`);
-  cell.title = `Proxy conflict: the host goes through the proxy of ${owner}, so it is blocked for this root`;
+  cell.title = `A proxy conflict: the host goes through the proxy of ${owner}, so it is blocked for this root. Remove it from ${owner} to route it through this root's proxy.`;
   return cell;
 }
 
@@ -36,7 +41,7 @@ function hostRows(mask, hosts, seen, needle, route) {
     if (needle !== "" && !host.includes(needle)) continue;
     const row = element("tr");
     row.append(element("td", "host", host));
-    row.append(routeCell(shared.get(host)));
+    row.append(routeCell(shared.get(host), route?.blocks[host]));
     row.append(element("td", "muted", formatTime(hosts[host])));
     row.append(element("td", "muted", seen[host] === undefined ? "—" : formatTime(seen[host])));
     const cell = element("td");

@@ -4,8 +4,9 @@ import { parentName } from "./hosts.js";
 // Which proxy carries a learned record, and which roots may use it.
 //
 // A PAC sees only the host, never the tab, so a record learned by several roots has one route: the System PAC asks
-// the User PAC on behalf of the record's first group in mask order. A root whose own proxy is a different one must
+// the User PAC on behalf of the root that learned the record first. A root whose own proxy is a different one must
 // not reach the record at all, or its pages would go out through another root's proxy: that is a proxy conflict.
+// Removing the record from the root that routes it hands the route to the next root that holds it.
 
 export const SAME = "same";
 export const UNCHECKED = "unchecked";
@@ -37,6 +38,24 @@ export function unchecked(state) {
   return Object.keys(state.groups).filter((mask) => state.groups[mask].rootHost !== null && !Object.hasOwn(answers, mask));
 }
 
+// The group that routes a record: the one that learned it first, the first in mask order on a tie. `masks` are the
+// groups that hold the record, in mask order.
+export function ownerOf(groups, masks, host) {
+  let owner = masks[0];
+  for (const mask of masks) if (groups[mask].hosts[host] < groups[owner].hosts[host]) owner = mask;
+  return owner;
+}
+
+// Every group with only the records it routes: what the System PAC needs.
+export function routedGroups(groups) {
+  const routed = Object.fromEntries(Object.entries(groups).map(([mask, { rootHost }]) => [mask, { rootHost, hosts: {} }]));
+  for (const [host, masks] of hostIndex(groups)) {
+    const owner = ownerOf(groups, masks, host);
+    routed[owner].hosts[host] = groups[owner].hosts[host];
+  }
+  return routed;
+}
+
 // Whether a root may use a record routed for `owner`: always its own, another root's only on a proxy known to be the
 // same. Until both proxies are checked the record is blocked for the root without being a conflict yet.
 export function verdict(mask, owner, answers) {
@@ -57,8 +76,7 @@ function eachRoute(groups, answers, psl, visit) {
     for (let name = parentName(host); name !== null; name = parentName(name)) {
       if (index.has(name) && !suffixes.has(name)) for (const mask of index.get(name)) holders.add(mask);
     }
-    // The System PAC indexes the groups in mask order and keeps the first group for each record.
-    const owner = masks[0];
+    const owner = ownerOf(groups, masks, host);
     for (const mask of holders) visit(mask, host, owner, verdict(mask, owner, answers), suffixes.has(host));
   }
 }
@@ -74,13 +92,19 @@ export function routesOf(groups, answers, psl) {
   return routes;
 }
 
-// For the viewer: each root's proxy and the records it uses through another root's route, sorted by host.
+// For the viewer: each root's proxy, the records it uses through another root's route, and the roots each record
+// it routes is blocked for.
 export function sharedRoutes(state, psl) {
   const answers = answersOf(state);
-  const roots = Object.fromEntries(Object.keys(state.groups).map((mask) => [mask, { proxy: answers[mask] ?? null, shared: [] }]));
+  const roots = Object.fromEntries(Object.keys(state.groups).map((mask) => [mask, { proxy: answers[mask] ?? null, shared: [], blocks: {} }]));
   eachRoute(state.groups, answers, psl, (mask, host, owner, result) => {
-    if (owner !== mask) roots[mask].shared.push({ host, owner, verdict: result, ownerProxy: answers[owner] ?? null });
+    if (owner === mask) return;
+    roots[mask].shared.push({ host, owner, verdict: result, ownerProxy: answers[owner] ?? null });
+    if (result === CONFLICT) (roots[owner].blocks[host] ??= []).push(mask);
   });
-  for (const root of Object.values(roots)) root.shared.sort((a, b) => (a.host < b.host ? -1 : a.host > b.host ? 1 : 0));
+  for (const root of Object.values(roots)) {
+    root.shared.sort((a, b) => (a.host < b.host ? -1 : a.host > b.host ? 1 : 0));
+    for (const masks of Object.values(root.blocks)) masks.sort();
+  }
   return roots;
 }

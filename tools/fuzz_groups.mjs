@@ -79,8 +79,8 @@ function oracle(host, { roots, bypass }, groups) {
   for (let k = labels.length - 1; k >= 0; k--) {
     const name = labels.slice(k).join(".");
     if (name.length > 253 || (k > 0 && PSL.isPublicSuffix(name))) continue;
-    const mask = masks.find((m) => Object.hasOwn(groups[m].hosts, name));
-    if (mask !== undefined) found = groups[mask];
+    const holders = masks.filter((m) => Object.hasOwn(groups[m].hosts, name));
+    if (holders.length > 0) found = groups[holders.reduce((a, b) => (groups[b].hosts[name] < groups[a].hosts[name] ? b : a))];
   }
   if (found !== null) return userDecision(found.rootHost, roots);
   return firstMatch(host, bypass) !== null ? "DIRECT" : userDecision(host, roots);
@@ -113,8 +113,8 @@ function proxiesFor(groups, roots) {
   return Object.fromEntries(Object.entries(groups).flatMap(([mask, { rootHost }]) => (rootHost === null ? [] : [[mask, { host: rootHost, answer: userDecision(rootHost, roots) }]])));
 }
 
-// The root a request belongs to: its frame's root, else its page's root.
-const contextRoot = (top, initiator, roots) => rootOf(initiator, roots) ?? rootOf(top, roots);
+// The root a request belongs to: its page's root, else its frame's root.
+const contextRoot = (top, initiator, roots) => rootOf(top, roots) ?? rootOf(initiator, roots);
 
 function probesOf(groups, analysis, extra) {
   const probes = new Set(extra);

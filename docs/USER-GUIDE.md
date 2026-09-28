@@ -25,7 +25,7 @@ The difference in one line: `deny` is "don't let it through", `bypass` is "let i
 For every request the System PAC checks these conditions in order:
 
 1. **`root` mask** — your `FindProxyForURL` is called and `DIRECT` is stripped from its answer; if no proxy is left, the PAC throws and the request is not sent.
-2. **Learned host** — follows the rule of its root. This decision applies to the whole browser, not only to the root tab. A learned entry covers its subdomains; the exception is a public suffix such as `github.io` or `s3.amazonaws.com`: such an entry applies only to that exact host, so it does not pull every site in the zone into the proxy. A host learned by several roots follows the rule of the first of them in alphabetical order of the masks (see [Shared hosts and proxy conflicts](#shared-hosts-and-proxy-conflicts)).
+2. **Learned host** — follows the rule of its root. This decision applies to the whole browser, not only to the root tab. A learned entry covers its subdomains; the exception is a public suffix such as `github.io` or `s3.amazonaws.com`: such an entry applies only to that exact host, so it does not pull every site in the zone into the proxy. A host learned by several roots follows the rule of the root that learned it first (see [Shared hosts and proxy conflicts](#shared-hosts-and-proxy-conflicts)).
 3. **`bypass` mask** — `DIRECT` without calling your PAC.
 4. **Everything else** — your `FindProxyForURL` as is.
 
@@ -80,13 +80,15 @@ if (root(host, "facebook.com")) return PROXY1;
 if (root(host, "instagram.com")) return PROXY2;
 ```
 
-Each root learns `fbcdn.net` on its own: a host another root has learned is still blocked in this root's pages until this root learns it too. The System PAC routes the host by the first of its groups in alphabetical order of the masks, here `facebook.com`, so `fbcdn.net` goes through PROXY1. For `instagram.com` that would mean its pages talking to `fbcdn.net` through the other proxy, so the extension blocks the host in `instagram.com` pages instead. That is a **proxy conflict**: the icon turns amber with `!`, the popup names the host, both roots and both proxies, the System PAC viewer marks the host in the root's group, and the diagnostic log records a **Proxy conflict** error. A reload does not help.
+Each root learns `fbcdn.net` on its own: a host another root has learned is still blocked in this root's pages until this root learns it too. The System PAC routes the host by the root that learned it first, say `facebook.com`, so `fbcdn.net` goes through PROXY1. For `instagram.com` that would mean its pages talking to `fbcdn.net` through the other proxy, so the extension blocks the host in `instagram.com` pages instead. That is a **proxy conflict**: the icon turns amber with `!`, the popup names the host, both roots and both proxies, the System PAC viewer marks the host in the root's group, and the diagnostic log records a **Proxy conflict** error. A reload does not help.
 
 Which proxy a root uses is found by a trial run of your User PAC for the root's host, on every save and whenever a root learns its first host. Until then the root's shared hosts are blocked for it, and the page asks for a reload. Two roots whose PAC gives the same answer share their hosts freely.
 
-To resolve a conflict, either give both roots the same proxy, or remove the host from one of the groups in the System PAC viewer. Removing it from the root it is blocked for only lasts until that root learns it again; removing it from the root that routes it moves the route to the other root, and then the conflict moves with it.
+The System PAC viewer shows both sides: in the group of the root that routes the host, its route reads `own proxy · blocked for instagram.com`; in the other group it is red, `facebook.com · PROXY1 · blocked here`.
 
-A request belongs to the root of the frame or worker that makes it, and to the root of the page otherwise: an `instagram.com` frame embedded in a `facebook.com` page learns and loads its hosts as `instagram.com`.
+A conflict cannot disappear while both roots need the host on different proxies; you choose which root gets it. Give both roots the same proxy, or remove the host from the group of the root that routes it: the route passes to the other root, and it stays there, because the next time the first root needs the host it learns it after the other one and gets the conflict itself. Removing the host from the root it is blocked for helps only until that root needs it again.
+
+A request belongs to the root of the tab's page, whatever frame makes it: a `facebook.com` frame embedded in an `instagram.com` page learns and loads its hosts as `instagram.com`, so a root learns only from its own pages. Only a frame or a worker of a root outside root pages, say an `instagram.com` embed on a news site, works as that root.
 
 ### Template
 

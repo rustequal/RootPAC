@@ -103,7 +103,7 @@ docs/USER-GUIDE.md   user guide
 
 - `preconnect` and `preload` from an Early Hints (`103`) response are invisible to DNR. Such connections are covered only by the route in your User PAC.
 - A `bypass` host sees your real IP, even when a root page requests it. This is a deliberate trade-off.
-- A host needed by roots on different proxies can go through only one of them: the PAC sees the host, not the tab. It works for the root first in alphabetical order and is blocked for the others (a proxy conflict). Which proxy a root uses is taken from a trial run of the User PAC in a sandbox, where `dnsResolve` answers nothing and `myIpAddress` is `127.0.0.1`; a User PAC that routes by those gets a different answer there than in the browser.
+- A host needed by roots on different proxies can go through only one of them: the PAC sees the host, not the tab. It works for the root that learned it first and is blocked for the others (a proxy conflict); removing it from that root in the System PAC viewer hands it to the next one. Which proxy a root uses is taken from a trial run of the User PAC in a sandbox, where `dnsResolve` answers nothing and `myIpAddress` is `127.0.0.1`; a User PAC that routes by those gets a different answer there than in the browser.
 - There is no off switch in the interface: one click would remove both the proxy and the blocking. Disable the extension in `chrome://extensions`.
 
 ## License

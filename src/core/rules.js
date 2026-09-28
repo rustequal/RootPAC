@@ -198,13 +198,13 @@ export function buildRules(policy) {
   return rules;
 }
 
-// A request belongs to the root of the frame or worker that made it, and to the root of the page otherwise; the
-// learner attributes it the same way.
+// A request belongs to the root of its page, and outside root pages to the root of the frame or worker that made it;
+// the learner attributes it the same way.
 function scopesOf({ domain, shadows }, roots) {
   const shadowed = (key) => (shadows.length === 0 ? {} : { [key]: [...shadows] });
   return [
-    { topDomains: [domain], ...shadowed("excludedTopDomains"), excludedInitiatorDomains: [...roots] },
-    { initiatorDomains: [domain], ...shadowed("excludedInitiatorDomains") },
+    { topDomains: [domain], ...shadowed("excludedTopDomains") },
+    { initiatorDomains: [domain], ...shadowed("excludedInitiatorDomains"), excludedTopDomains: [...roots] },
   ];
 }
 
