@@ -49,6 +49,15 @@ export function createChecker({ offscreen, runtime }) {
 
   return {
     cancel,
+    // A background run: waits its turn and is never cancelled by a user's check, only disturbed by one.
+    probe(request) {
+      const result = tail.then(() => execute({ cancelled: false }, request));
+      tail = result.then(
+        () => undefined,
+        () => undefined,
+      );
+      return result;
+    },
     async run(request) {
       if (current !== null) {
         current.cancelled = true;

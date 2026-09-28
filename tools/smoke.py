@@ -324,6 +324,8 @@ async def check_ui(context, worker, page, user_pac, failures):
 
 
 async def check_trailing_dot(page, failures):
+    await page.goto("http://root.test:8080/")
+    await asyncio.sleep(1)
     contacted = len([name for name in direct if name != BYPASS_ORIGIN])
     proxied.clear()
     status = await page.evaluate("fetch('http://cdn.test.:8080/dot', { mode: 'no-cors' }).then(() => 'loaded', () => 'blocked')")
@@ -335,6 +337,24 @@ async def check_trailing_dot(page, failures):
         failures.append(f"a learned host with a trailing dot was contacted directly: {touched}")
     if status == "loaded" and not through:
         failures.append("a learned host with a trailing dot loaded without the proxy")
+
+
+async def check_per_root_learning(worker, page, failures):
+    await page.goto("http://root2.test:8080/")
+    await asyncio.sleep(1)
+    proxied.clear()
+    first = await fresh_request(page, "http://cdn.test:8080/other-root")
+    await asyncio.sleep(1.5)
+    groups = await groups_of(worker)
+    second = await fresh_request(page, "http://cdn.test:8080/other-root")
+    through = "http://cdn.test:8080/other-root" in proxied
+    print(f"per-root learning: cdn.test of root.test from root2.test first {first}, then {second}, through the proxy {through}, root2.test {groups.get('root2.test')}")
+    if first != "blocked":
+        failures.append("a host learned by another root was loaded before this root learned it")
+    if "cdn.test" not in groups.get("root2.test", []) or "cdn.test" not in groups.get("root.test", []):
+        failures.append(f"a host another root learned was not learned by this root too: {groups}")
+    if second != "loaded" or not through:
+        failures.append(f"a host learned by both roots on one proxy was not proxied: {second}")
 
 
 async def groups_of(worker):
@@ -372,7 +392,8 @@ async def check_shared_cdn(worker, page, failures):
     await asyncio.sleep(1)
     status = await fresh_request(page, "http://e.shared.test:8080/e")
     print(f"shared CDN legacy import: {imported.get('ok')}, groups {both}, shared.test in DNR x{domains.count('shared.test')}, e.shared.test {status}")
-    if not imported.get("ok") or "shared.test" not in both.get("root.test", []) or both.get("root2.test") != ["shared.test"] or domains.count("shared.test") != 1:
+    # Each root allows its own copy of the record, once for its pages and once for its frames.
+    if not imported.get("ok") or "shared.test" not in both.get("root.test", []) or both.get("root2.test") != ["shared.test"] or domains.count("shared.test") != 4:
         failures.append(f"a shared record in two groups was not built: {imported}, {both}, {domains}")
     if status != "loaded" or "http://e.shared.test:8080/e" not in proxied:
         failures.append(f"a node of a record shared by two groups was not proxied: {status}")
@@ -659,6 +680,7 @@ async def main():
                     await check_aggregation(worker, page, failures)
                     await check_shared_cdn(worker, page, failures)
                     await check_trailing_dot(page, failures)
+                    await check_per_root_learning(worker, page, failures)
                     worker = await check_worker_restart(context, worker, page, failures) or worker
                     await check_scale(worker, page, failures)
                     await check_gate(worker, user_pac, failures)

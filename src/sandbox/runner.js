@@ -89,13 +89,15 @@ var rootpacTrial = (function (global) {
       if (typeof global.FindProxyForURL !== "function") throw new TypeError("FindProxyForURL is undefined or not a function");
     });
     if (failed !== null) return failed;
+    var answers = {};
     for (var i = 0; i < request.hosts.length; i++) {
       var host = request.hosts[i];
       failed = stage("probe", host, request.budget, function () {
-        global.FindProxyForURL("https://" + host + "/", host);
+        var answer = global.FindProxyForURL("https://" + host + "/", host);
+        answers[host] = typeof answer === "string" ? answer : null;
       });
       if (failed !== null) return failed;
     }
-    return { ok: true };
+    return { ok: true, answers: answers };
   };
 })(globalThis);

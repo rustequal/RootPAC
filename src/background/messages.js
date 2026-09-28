@@ -3,7 +3,8 @@ import { exportBackup, readBackup } from "../core/backup.js";
 import { buildSystemPac } from "../core/build.js";
 import { rootOf } from "../core/hosts.js";
 import { adoptLegacyGroups, aggregateGroups, pruneSeen, reconcileGroups } from "../core/groups.js";
-import { trialErrors, trialPlan } from "../core/trial.js";
+import { answersOf, proxiesOf } from "../core/routes.js";
+import { trialAnswers, trialErrors, trialPlan } from "../core/trial.js";
 import { NO_LOG } from "./log.js";
 
 function requireString(value, name) {
@@ -35,7 +36,7 @@ export function createCommands({ store, engine, checker, learner, log = NO_LOG }
     const { request, shifts } = trialPlan(systemPac, analysis, groups);
     const { cancelled, outcome } = await checker.run(request);
     if (cancelled) throw new Error("Check was cancelled");
-    return trialErrors(outcome, { systemPac, userPac, shifts });
+    return { errors: trialErrors(outcome, { systemPac, userPac, shifts }), answers: trialAnswers(outcome) };
   };
 
   const saveUserPac = async ({ text }) => {
@@ -43,11 +44,11 @@ export function createCommands({ store, engine, checker, learner, log = NO_LOG }
     const result = analyzeUserPac(text);
     if (!result.ok) return { ok: false, errors: result.errors };
     const analysis = { roots: result.roots, deny: result.deny, bypass: result.bypass };
-    const errors = await trial(text, analysis, normalize(store.state.groups, store.state.seen, analysis).groups);
+    const { errors, answers } = await trial(text, analysis, normalize(store.state.groups, store.state.seen, analysis).groups);
     if (errors.length > 0) return { ok: false, errors };
     return store.run(async (state) => {
       const { groups, seen } = normalize(state.groups, state.seen, analysis);
-      const next = rebuild({ ...state, userPac: text, analysis, userPacErrors: null }, groups, seen);
+      const next = rebuild({ ...state, userPac: text, analysis, userPacErrors: null, proxies: proxiesOf(groups, answers) }, groups, seen);
       const control = await engine.commit(next);
       return { ok: true, errors: [], analysis, control };
     });
@@ -88,10 +89,10 @@ export function createCommands({ store, engine, checker, learner, log = NO_LOG }
     const { userPac, analysis } = read;
     buildSystemPac(userPac, read.groups, store.psl);
     const { groups } = aggregateGroups(read.groups, {}, analysis, store.psl);
-    const errors = await trial(userPac, analysis, groups);
+    const { errors, answers } = await trial(userPac, analysis, groups);
     if (errors.length > 0) return { ok: false, errors };
     return store.run(async (state) => {
-      const next = rebuild({ ...state, userPac, analysis, userPacErrors: null }, groups, {});
+      const next = rebuild({ ...state, userPac, analysis, userPacErrors: null, proxies: proxiesOf(groups, answers) }, groups, {});
       const control = await engine.commit(next);
       return { ok: true, errors: [], analysis, control };
     });
@@ -105,6 +106,7 @@ export function createCommands({ store, engine, checker, learner, log = NO_LOG }
     const host = learner.tabHost(tabId);
     const mask = analysis === null || host === null ? null : rootOf(host, analysis.roots);
     const group = mask === null ? null : groups[mask];
+    const answers = answersOf(store.state);
     return {
       ok: true,
       mask,
@@ -115,6 +117,7 @@ export function createCommands({ store, engine, checker, learner, log = NO_LOG }
       newHosts: learner.newHosts(tabId),
       incomplete: learner.incomplete(tabId),
       proxyError: learner.proxyError(tabId),
+      conflicts: learner.conflicts(tabId).map((item) => ({ ...item, proxy: answers[item.root] ?? null, ownerProxy: answers[item.owner] ?? null })),
     };
   };
 

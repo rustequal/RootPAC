@@ -42,7 +42,7 @@ test("the plan carries the instrumented System PAC, the budget and the probes", 
 test("a working User PAC passes", () => {
   assert.deepEqual(check(fixture("user.pac")).errors, []);
   const { outcome, errors } = check(pac(`${ROOT}\n  if (isInNet(dnsResolve(host), "10.0.0.0", "255.0.0.0")) return "DIRECT";\n  return myIpAddress() === "127.0.0.1" && !isPlainHostName(host) ? "DIRECT" : "PROXY q:1";`));
-  assert.deepEqual(outcome, { ok: true });
+  assert.deepEqual(outcome, { ok: true, answers: { "a.com": "PROXY p:1", "b.com": "PROXY p:1", "example.com": "DIRECT" } });
   assert.deepEqual(errors, []);
 });
 

@@ -21,7 +21,7 @@ export function isLearnableName(host) {
   return isHostName(host) && !underLocalhost(host);
 }
 
-function parentName(name) {
+export function parentName(name) {
   const dot = name.indexOf(".");
   return dot < 0 ? null : name.slice(dot + 1);
 }

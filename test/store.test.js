@@ -27,7 +27,7 @@ test("first load writes the schema and defaults", async () => {
   const area = new FakeArea();
   const store = new Store(area, new FakeArea());
   const state = await store.load(PSL);
-  assert.deepEqual(state, { enabled: true, userPac: null, analysis: null, appliedPac: null, userPacErrors: null, groups: {}, seen: {} });
+  assert.deepEqual(state, { enabled: true, userPac: null, analysis: null, appliedPac: null, userPacErrors: null, proxies: null, groups: {}, seen: {} });
   assert.deepEqual(area.items, { schemaVersion: SCHEMA_VERSION, enabled: true });
 });
 
@@ -115,6 +115,7 @@ test("a stored User PAC that no longer validates keeps the last applied configur
     analysis: ANALYSIS,
     appliedPac: "last applied",
     userPacErrors: errors,
+    proxies: null,
     groups: { "a.com": GROUP },
     seen: { "a.com": { "cdn.a.net": 5 } },
   });

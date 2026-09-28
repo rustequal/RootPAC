@@ -1,5 +1,6 @@
 import { CLOSED_TEXT, INCOGNITO_TEXT, element, formatTime, incognitoAllowed, onStored, proxyErrorText, readLocal, send } from "../shared/rpc.js";
 import { header } from "../shared/logo.js";
+import { conflictText } from "../log/entries.js";
 
 const box = document.getElementById("state");
 const banners = document.getElementById("banners");
@@ -52,6 +53,10 @@ function showState(state, tabId) {
     row.append(element("span", "label", "Loaded before protection was ready — part of the page was blocked"), reload());
     box.append(row);
   }
+  const conflicts = state.conflicts ?? [];
+  if (conflicts.length > 0) {
+    box.append(stat(conflicts.length, `host${plural(conflicts.length)} blocked by a proxy conflict`, "failed"));
+  }
   if (state.newHosts > 0) {
     const row = stat(state.newHosts, `new host${plural(state.newHosts)} blocked and learned`, "learned");
     row.append(reload());
@@ -82,6 +87,11 @@ async function render() {
   if (session.startupError !== undefined) banner(`RootPAC failed to start: ${session.startupError}`, "banner error");
   const learnError = session.lastLearnError;
   if (learnError !== undefined) banner(`${formatTime(learnError.time)} — Learning failed: ${learnError.message}`, "banner error");
+  const conflicts = state?.ok ? (state.conflicts ?? []) : [];
+  for (const conflict of conflicts) banner(`Proxy conflict: ${conflictText(conflict)}`, "banner error");
+  if (conflicts.length > 0) {
+    banner("A PAC cannot tell which tab asks, so a host has one proxy for every root. Give the roots the same proxy, or remove the host from one of the groups in System PAC.");
+  }
   const error = state?.ok ? state.proxyError : null;
   if (error !== null && error !== undefined) {
     const failed = error.count > 1 ? ` (${error.count} requests failed on this page)` : "";

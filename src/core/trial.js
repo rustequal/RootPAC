@@ -20,9 +20,20 @@ export function probeHosts({ roots }, groups) {
   return [...hosts];
 }
 
-export function trialPlan(systemPac, analysis, groups) {
+// A run of the System PAC for the given hosts.
+export function probePlan(systemPac, hosts) {
   const { code, shifts } = instrument(systemPac);
-  return { request: { code: code + SOURCE_URL, budget: STEP_BUDGET, hosts: probeHosts(analysis, groups) }, shifts };
+  return { request: { code: code + SOURCE_URL, budget: STEP_BUDGET, hosts }, shifts };
+}
+
+export function trialPlan(systemPac, analysis, groups) {
+  return probePlan(systemPac, probeHosts(analysis, groups));
+}
+
+// What the System PAC answered for each probed host; only a run without errors has answers.
+export function trialAnswers(outcome) {
+  checkOutcome(outcome);
+  return outcome.ok ? { ...outcome.answers } : {};
 }
 
 function isPosition(value) {
@@ -31,7 +42,12 @@ function isPosition(value) {
 
 function checkOutcome(outcome) {
   if (typeof outcome !== "object" || outcome === null) throw new Error("Trial run returned no result");
-  if (outcome.ok === true) return;
+  if (outcome.ok === true) {
+    const { answers } = outcome;
+    const valid = typeof answers === "object" && answers !== null && Object.values(answers).every((answer) => answer === null || typeof answer === "string");
+    if (!valid) throw new Error("Trial run returned malformed answers");
+    return;
+  }
   const valid =
     outcome.ok === false &&
     STAGES.has(outcome.stage) &&

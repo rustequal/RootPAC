@@ -43,10 +43,37 @@ export function vmChecker() {
       this.requests.push(request);
       return { cancelled: false, outcome: runTrial(request) };
     },
+    async probe(request) {
+      this.requests.push(request);
+      return runTrial(request);
+    },
     async cancel() {
       return false;
     },
   };
+}
+
+// How Chrome's declarativeNetRequest decides a request: the highest priority matching rule wins, a block before an
+// allow of the same priority, and nothing matching lets it pass.
+export function dnrDecision(rules, { host, top = null, initiator = null, type = "script" }) {
+  const within = (list, name) => name !== null && list.some((domain) => name === domain || name.endsWith(`.${domain}`));
+  let best = null;
+  for (const rule of rules) {
+    const c = rule.condition;
+    if (rule.action.type === "modifyHeaders") continue;
+    if (c.resourceTypes && !c.resourceTypes.includes(type)) continue;
+    if (c.excludedResourceTypes && c.excludedResourceTypes.includes(type)) continue;
+    if (c.topDomains && !within(c.topDomains, top)) continue;
+    if (c.excludedTopDomains && within(c.excludedTopDomains, top)) continue;
+    if (c.initiatorDomains && !within(c.initiatorDomains, initiator)) continue;
+    if (c.excludedInitiatorDomains && within(c.excludedInitiatorDomains, initiator)) continue;
+    if (c.requestDomains && !within(c.requestDomains, host)) continue;
+    if (c.excludedRequestDomains && within(c.excludedRequestDomains, host)) continue;
+    if (c.regexFilter && !new RegExp(c.regexFilter, "i").test(`https://${host}/`)) continue;
+    const priority = rule.priority ?? 1;
+    if (best === null || priority > best.priority || (priority === best.priority && rule.action.type === "block")) best = { priority, type: rule.action.type };
+  }
+  return best?.type ?? "allow";
 }
 
 export const PSL = parsePublicSuffixList(readFileSync(new URL("../vendor/public_suffix_list.dat", import.meta.url), "utf8"));

@@ -8,7 +8,8 @@ const SIZES = [16, 32];
 const FIELDS = ["icon", "text"];
 const OFF = Object.freeze({ icon: "off", text: "!" });
 const IDLE = Object.freeze({ icon: "idle", text: "" });
-const PROXY_FAILED = Object.freeze({ icon: "pending", text: "!" });
+// A proxy failure or a proxy conflict on the page; the popup says which.
+const ALERT = Object.freeze({ icon: "pending", text: "!" });
 const UNKNOWN = Symbol("unknown");
 
 export async function decodeIcon(path) {
@@ -53,7 +54,7 @@ export function createBadge({ action, runtime, tabs, engine, store, learner, dec
     if (common === OFF) return OFF;
     const host = learner.tabHost(tabId);
     if (host === null || rootOf(host, store.state.analysis.roots) === null) return IDLE;
-    if (learner.proxyError(tabId) !== null) return PROXY_FAILED;
+    if (learner.conflicts(tabId).length > 0 || learner.proxyError(tabId) !== null) return ALERT;
     const count = learner.proxied(tabId);
     const blocked = learner.newHosts(tabId) > 0 || learner.pending(tabId) > 0 || learner.incomplete(tabId);
     const icon = blocked ? "pending" : learner.loading(tabId) ? "idle" : "active";

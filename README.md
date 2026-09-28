@@ -14,7 +14,8 @@ The core guarantee: no request from a root's context reaches the target server d
 1. You write an ordinary PAC file — the **User PAC** — and mark the sites you want with the `root()` directive.
 2. When a root page requests an unknown host, the request is blocked (`declarativeNetRequest`) and the host is recorded in that root's group.
 3. The extension builds the **System PAC**: your PAC plus the learned hosts, which follow the same route as their root. The PAC is installed with `mandatory: true`, so if the proxy is unreachable the connection does not fall back to direct.
-4. After one to three reloads the site works entirely through the proxy.
+4. Every root learns the hosts it needs itself, even ones another root has learned. A PAC cannot tell which tab asks, so a host shared by roots on different proxies goes through one of them; it is blocked for the other root and reported as a **proxy conflict** instead of leaking that root's traffic through another proxy.
+5. After one to three reloads the site works entirely through the proxy.
 
 Before it is applied, every User PAC goes through parsing, static analysis and a trial run in an isolated sandbox. If the text is invalid, the extension stays in safe mode and never opens direct connections.
 
@@ -55,9 +56,9 @@ Chrome reads an unpacked extension directly from that folder, and the extension 
 
 - **Popup** — the state of the current tab: how many hosts were loaded, how many went through the proxy, how many new ones were blocked for learning (with a **Reload** button).
 - **Options** — the User PAC editor with checks on save, backup export and import, and the **Record a diagnostic log** switch.
-- **Diagnostic log** — off by default. When on, it records root page loads, new hosts blocked and learned, hosts left out of learning, every proxy failure with the host that failed and its route, request errors in root pages, protection state and configuration changes; proxy failures are also summed up by host. The last 5000 events are kept in the browser (IndexedDB) and can be exported. With the switch off, nothing is recorded.
+- **Diagnostic log** — off by default. When on, it records root page loads, new hosts blocked and learned, hosts left out of learning, proxy conflicts between roots, every proxy failure with the host that failed and its route, request errors in root pages, protection state and configuration changes; proxy failures are also summed up by host. The last 5000 events are kept in the browser (IndexedDB) and can be exported. With the switch off, nothing is recorded.
 - **System PAC viewer** — the applied PAC, read-only, and the learned groups by root; single hosts and whole groups can be removed.
-- **Icon**: blue-grey — an ordinary tab; green with a badge — a root tab; amber — new hosts were learned, reload needed; grey with `!` — the proxy is not applied (safe mode, or another extension has taken over the proxy setting).
+- **Icon**: blue-grey — an ordinary tab; green with a badge — a root tab; amber — new hosts were learned, reload needed; amber with `!` — a proxy conflict or a proxy failure on the page; grey with `!` — the proxy is not applied (safe mode, or another extension has taken over the proxy setting).
 
 ## Development
 
@@ -102,6 +103,7 @@ docs/USER-GUIDE.md   user guide
 
 - `preconnect` and `preload` from an Early Hints (`103`) response are invisible to DNR. Such connections are covered only by the route in your User PAC.
 - A `bypass` host sees your real IP, even when a root page requests it. This is a deliberate trade-off.
+- A host needed by roots on different proxies can go through only one of them: the PAC sees the host, not the tab. It works for the root first in alphabetical order and is blocked for the others (a proxy conflict). Which proxy a root uses is taken from a trial run of the User PAC in a sandbox, where `dnsResolve` answers nothing and `myIpAddress` is `127.0.0.1`; a User PAC that routes by those gets a different answer there than in the browser.
 - There is no off switch in the interface: one click would remove both the proxy and the blocking. Disable the extension in `chrome://extensions`.
 
 ## License

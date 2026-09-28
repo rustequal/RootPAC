@@ -5,7 +5,7 @@ import { exportBackup, readBackup } from "../src/core/backup.js";
 import { buildSystemPac } from "../src/core/build.js";
 import { firstMatch } from "../src/core/glob.js";
 import { adoptLegacyGroups, aggregateGroups, hostIndex, mergeGroups, pruneSeen, reconcileGroups } from "../src/core/groups.js";
-import { covers, hostFromUrl, isHostName, isLearnable, maskDomain } from "../src/core/hosts.js";
+import { covers, hostFromUrl, isHostName, isLearnable, learnedOwner, maskDomain, rootOf } from "../src/core/hosts.js";
 import { underLocalhost } from "../src/core/names.js";
 import { parsePublicSuffixList } from "../src/core/psl.js";
 import { buildRules, intersectPolicies, policyOf } from "../src/core/rules.js";
@@ -86,20 +86,35 @@ function oracle(host, { roots, bypass }, groups) {
   return firstMatch(host, bypass) !== null ? "DIRECT" : userDecision(host, roots);
 }
 
-function allowedInRootContext(rules, host, top) {
+const NEUTRAL = "zz-embed.example";
+
+// A request in a page of `top` made by a frame or worker of `initiator`, decided the way DNR decides it.
+function allowedIn(rules, host, top, initiator = top) {
   const url = `https://${host}/`;
   let best = null;
   const within = (list, name) => list.some((domain) => covers(domain, name));
   for (const rule of [...rules.dynamic, ...rules.session]) {
     const c = rule.condition;
     if (rule.action.type === "modifyHeaders" || (c.resourceTypes && !c.resourceTypes.includes("script"))) continue;
-    if ((c.topDomains && !within(c.topDomains, top)) || (c.initiatorDomains && !within(c.initiatorDomains, top))) continue;
-    if ((c.requestDomains && !within(c.requestDomains, host)) || (c.regexFilter && !new RegExp(c.regexFilter).test(url))) continue;
+    if ((c.topDomains && !within(c.topDomains, top)) || (c.excludedTopDomains && within(c.excludedTopDomains, top))) continue;
+    if ((c.initiatorDomains && !within(c.initiatorDomains, initiator)) || (c.excludedInitiatorDomains && within(c.excludedInitiatorDomains, initiator))) continue;
+    if ((c.requestDomains && !within(c.requestDomains, host)) || (c.excludedRequestDomains && within(c.excludedRequestDomains, host))) continue;
+    if (c.regexFilter && !new RegExp(c.regexFilter).test(url)) continue;
     const priority = rule.priority ?? 1;
     if (best === null || priority > best.priority || (priority === best.priority && rule.action.type === "block")) best = { priority, type: rule.action.type };
   }
   return best?.type === "allow";
 }
+
+const allowedInRootContext = (rules, host, top) => allowedIn(rules, host, top);
+
+// What the trial run records for each root: the User PAC's answer for its rootHost.
+function proxiesFor(groups, roots) {
+  return Object.fromEntries(Object.entries(groups).flatMap(([mask, { rootHost }]) => (rootHost === null ? [] : [[mask, { host: rootHost, answer: userDecision(rootHost, roots) }]])));
+}
+
+// The root a request belongs to: its frame's root, else its page's root.
+const contextRoot = (top, initiator, roots) => rootOf(initiator, roots) ?? rootOf(top, roots);
 
 function probesOf(groups, analysis, extra) {
   const probes = new Set(extra);
@@ -122,7 +137,7 @@ function check(tag, state, analysis, userPac, extra, learnedAlone) {
   let rules;
   try {
     pac = buildSystemPac(userPac, state.groups, PSL);
-    rules = buildRules(policyOf({ enabled: true, analysis, groups: state.groups }, PSL));
+    rules = buildRules(policyOf({ enabled: true, analysis, groups: state.groups, proxies: proxiesFor(state.groups, analysis.roots) }, PSL));
   } catch (error) {
     flag("build or rules throw", { tag, message: error.message });
     return null;
@@ -140,6 +155,15 @@ function check(tag, state, analysis, userPac, extra, learnedAlone) {
       if (got === "DIRECT" && !bypassed) flag("LEAK: DNR allows what the PAC sends DIRECT", { tag, host, top });
       if (underLocalhost(host) && !bypassed) flag("a localhost name is allowed in a root context", { tag, host });
     }
+    if (bypassed || rootOf(host, analysis.roots) !== null) continue;
+    const domains = analysis.roots.map(maskDomain);
+    for (const [top, initiator] of [...domains.map((d) => [d, d]), ...domains.map((d) => [d, NEUTRAL]), ...domains.map((d) => [NEUTRAL, d]), ...domains.flatMap((a) => domains.map((b) => [a, b]))]) {
+      if (!allowedIn(rules, host, top, initiator)) continue;
+      const mask = contextRoot(top, initiator, analysis.roots);
+      const group = mask === null ? undefined : state.groups[mask];
+      const own = group === undefined || group.rootHost === null ? null : userDecision(group.rootHost, analysis.roots);
+      if (got !== own) flag("LEAK: a root reaches a host through another root's proxy", { tag, host, top, initiator, mask, got, own });
+    }
   }
   for (const [mask, group] of Object.entries(state.groups)) {
     for (const host of Object.keys(group.hosts)) {
@@ -151,7 +175,8 @@ function check(tag, state, analysis, userPac, extra, learnedAlone) {
 
 function transition(tag, prev, next) {
   if (prev === null || next === null) return;
-  const policy = intersectPolicies(policyOf({ enabled: true, analysis: prev.analysis, groups: prev.state.groups }, PSL), policyOf({ enabled: true, analysis: next.analysis, groups: next.state.groups }, PSL));
+  const policyFor = ({ analysis, state }) => policyOf({ enabled: true, analysis, groups: state.groups, proxies: proxiesFor(state.groups, analysis.roots) }, PSL);
+  const policy = intersectPolicies(policyFor(prev), policyFor(next));
   const rules = buildRules(policy);
   const contexts = [loadPac(prev.pac), loadPac(next.pac)];
   const probes = new Set([...probesOf(prev.state.groups, prev.analysis, []), ...probesOf(next.state.groups, next.analysis, [])]);
@@ -197,22 +222,26 @@ function fuzz(seed) {
       const roll = random();
       const extra = [];
       if (roll < 0.7) {
-        const batch = new Map();
+        const batch = [];
         const index = hostIndex(state.groups);
+        const ownIndex = (groups, mask) => new Set(Object.keys(groups[mask]?.hosts ?? {}));
         for (let i = 1 + Math.floor(random() * 4); i > 0; i--) {
           const url = random() < 0.15 ? s.pick(ODD_URLS) : `https://${random() < 0.5 ? s.pick(s.pool) : s.name(1 + Math.floor(random() * 4))}/`;
           const host = hostFromUrl(url);
           if (host === null) continue;
           extra.push(host);
           const mask = s.pick(analysis.roots);
-          const rootHost = random() < 0.5 ? mask : `${s.pick(LABELS)}.${mask}`;
-          if (isHostName(rootHost) && !batch.has(host) && isLearnable(host, analysis, index, PSL)) batch.set(host, { mask, rootHost });
+          const rootHost = state.groups[mask]?.rootHost ?? (random() < 0.5 ? mask : `${s.pick(LABELS)}.${mask}`);
+          const own = ownIndex(state.groups, mask);
+          if (!isHostName(rootHost) || learnedOwner(host, own, PSL) !== null) continue;
+          // A root learns the record that already routes the host, like the learner does.
+          const target = learnedOwner(host, index, PSL) ?? host;
+          if (!batch.some(([name, source]) => name === target && source.mask === mask) && isLearnable(target, analysis, own, PSL)) batch.push([target, { mask, rootHost, host }]);
         }
-        if (batch.size > 0) {
-          for (const host of batch.keys()) learnedAlone.add(host);
+        if (batch.length > 0) {
+          for (const [target] of batch) learnedAlone.add(target);
           state = aggregateGroups(mergeGroups(state.groups, batch, step), state.seen, analysis, PSL);
-          const after = hostIndex(state.groups);
-          for (const host of batch.keys()) if (isLearnable(host, analysis, after, PSL)) flag("a learned host is learnable again", { tag, host });
+          for (const [, { mask, host }] of batch) if (learnedOwner(host, ownIndex(state.groups, mask), PSL) === null) flag("a learned host is unknown to its root", { tag, host, mask });
         }
       } else if (roll < 0.85) {
         const text = userPacText(s.config());

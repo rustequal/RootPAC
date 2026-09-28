@@ -41,7 +41,7 @@ const navigate = (learner, url, tabId = TAB, extra = {}) => {
   learner.onCommitted({ tabId, frameId: 0, url, documentLifecycle });
 };
 
-const tabRecord = (fields) => ({ host: null, navigation: 0, newHosts: 0, loaded: [], proxied: [], loading: false, incomplete: false, proxyError: null, ...fields });
+const tabRecord = (fields) => ({ host: null, navigation: 0, newHosts: 0, loaded: [], proxied: [], loading: false, incomplete: false, proxyError: null, conflicts: [], ...fields });
 const storedTabs = async (session) =>
   Object.fromEntries(Object.entries(await session.get(null)).flatMap(([key, value]) => (key.startsWith("tab:") ? [[key.slice(4), value]] : [])));
 const storedTab = async (session, tabId) => (await storedTabs(session))[tabId];
@@ -274,7 +274,7 @@ test("hosts sharing a registrable domain are aggregated and covered subdomains a
   assert.deepEqual(learned(area).hosts, { "googlevideo.com": 1000 });
   assert.deepEqual(browser.journal.entries, []);
   assert.deepEqual(area.items["seen:instagram.com"], { "googlevideo.com": 1002 });
-  assert.deepEqual((await session.get("seenThisSession")).seenThisSession, ["googlevideo.com"]);
+  assert.deepEqual((await session.get("seenThisSession")).seenThisSession, ["instagram.com googlevideo.com"]);
 });
 
 const commit = (learner, tabId = TAB, url = "https://www.instagram.com/") =>

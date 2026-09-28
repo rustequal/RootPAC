@@ -31,8 +31,13 @@ async function restartedEngine(area, browser) {
 const CLOSED = [RULE_IDS.block, RULE_IDS.deny, RULE_IDS.frame, RULE_IDS.reports, RULE_IDS.reportsFrame, RULE_IDS.embeds, RULE_IDS.rootRequests];
 const OPEN = [...CLOSED.slice(0, 3), RULE_IDS.unlock, ...CLOSED.slice(3), RULE_IDS.roots];
 
+// The hosts a root's pages may load; each is allowed once for the pages and once for the root's own frames.
 function allowedHosts(rules) {
-  return rules.filter(({ id }) => id >= RULE_IDS.hosts).flatMap(({ condition }) => condition.requestDomains);
+  const scoped = rules.filter(({ id, action }) => id >= RULE_IDS.hosts && action.type === "allow");
+  const pages = scoped.filter(({ condition }) => condition.topDomains !== undefined).flatMap(({ condition }) => condition.requestDomains);
+  const frames = scoped.filter(({ condition }) => condition.initiatorDomains !== undefined).flatMap(({ condition }) => condition.requestDomains);
+  assert.deepEqual(frames, pages);
+  return pages;
 }
 
 function allowedRoots(rules) {

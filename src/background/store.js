@@ -8,12 +8,12 @@ export const SCHEMA_VERSION = 1;
 const GROUP = "group:";
 const SEEN = "seen:";
 const VERIFIED = "stateVerified";
-const SCALARS = ["enabled", "userPac", "analysis", "appliedPac", "userPacErrors"];
+const SCALARS = ["enabled", "userPac", "analysis", "appliedPac", "userPacErrors", "proxies"];
 // Settings of the pages that are not part of the routing state; the store leaves them alone.
 const SETTINGS = new Set([LOG_SETTING]);
 
 function decode(items) {
-  const state = { enabled: true, userPac: null, analysis: null, appliedPac: null, userPacErrors: null, groups: {}, seen: {} };
+  const state = { enabled: true, userPac: null, analysis: null, appliedPac: null, userPacErrors: null, proxies: null, groups: {}, seen: {} };
   for (const [key, value] of Object.entries(items)) {
     if (key === "schemaVersion" || SETTINGS.has(key)) continue;
     if (SCALARS.includes(key)) state[key] = value;
@@ -32,6 +32,7 @@ function decode(items) {
     if (state[key] !== null && typeof state[key] !== "string") throw new Error(`Stored ${key} is not a string`);
   }
   if (state.analysis !== null && !isAnalysis(state.analysis)) throw new Error("Stored analysis is malformed");
+  if (!isProxies(state.proxies)) throw new Error("Stored proxies are malformed");
   for (const [mask, group] of Object.entries(state.groups)) {
     const valid = isRecord(group) && (group.rootHost === null || typeof group.rootHost === "string") && isRecord(group.hosts) && Object.values(group.hosts).every(isTime);
     if (!valid) throw new Error(`Stored group ${JSON.stringify(mask)} is malformed`);
@@ -49,6 +50,11 @@ function isRecord(value) {
 
 function isTime(value) {
   return Number.isSafeInteger(value) && value >= 0;
+}
+
+// The User PAC's answer for each root's rootHost, from the trial run; see core/routes.js.
+function isProxies(proxies) {
+  return proxies === null || (isRecord(proxies) && Object.values(proxies).every((item) => isRecord(item) && typeof item.host === "string" && typeof item.answer === "string"));
 }
 
 function isAnalysis(analysis) {

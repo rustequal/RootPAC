@@ -1,14 +1,16 @@
 // Text of diagnostic log entries; no DOM, so it is unit-tested.
 
 export const CATEGORIES = {
-  errors: new Set(["proxyFailure", "proxyError", "requestError", "incomplete", "learnError", "applyError", "startupError"]),
-  learning: new Set(["blocked", "reported", "learned", "skipped"]),
+  errors: new Set(["proxyFailure", "proxyError", "requestError", "incomplete", "learnError", "applyError", "startupError", "conflict", "proxyCheckError"]),
+  learning: new Set(["blocked", "reported", "learned", "skipped", "proxiesChecked"]),
   pages: new Set(["navigation"]),
   state: new Set(["protection", "command", "log", "lifecycle"]),
 };
 
 const LEVELS = {
   proxyFailure: "error",
+  conflict: "error",
+  proxyCheckError: "error",
   proxyError: "error",
   learnError: "error",
   applyError: "error",
@@ -44,6 +46,13 @@ export function routeText({ route, group, entry }) {
   if (route === "bypass") return "bypass, direct";
   if (route === "user PAC") return "User PAC route";
   return null;
+}
+
+// A record two roots learned while the System PAC can give it only one route: the owner's.
+export function conflictText({ host, root, owner, proxy, ownerProxy }) {
+  const known = proxy !== null && proxy !== undefined && ownerProxy !== null && ownerProxy !== undefined;
+  if (!known) return `${host} is learned by ${root} and ${owner}, whose proxies are not checked yet; blocked for ${root} until they are`;
+  return `${host} is learned by ${root} (${proxy}) and ${owner} (${ownerProxy}); it goes through ${owner}'s proxy, so it is blocked for ${root}`;
 }
 
 function requestText(entry) {
@@ -87,6 +96,12 @@ export function entryText(entry) {
       return `Reporting endpoint ${entry.host} of ${entry.root} queued for learning`;
     case "learned":
       return `${entry.host} learned into ${entry.root}${tab(entry)}`;
+    case "conflict":
+      return `Proxy conflict: ${conflictText(entry)}${tab(entry)}`;
+    case "proxiesChecked":
+      return `Proxies checked: ${Object.entries(entry.answers ?? {}).map(([root, answer]) => `${root} → ${answer}`).join(", ")}`;
+    case "proxyCheckError":
+      return `Checking the proxies of the roots failed: ${entry.message}`;
     case "skipped":
       return `${entry.host} requested by ${entry.root} is not learned: ${REASONS[entry.reason] ?? entry.reason}${tab(entry)}`;
     case "proxyFailure":

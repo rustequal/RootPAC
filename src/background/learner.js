@@ -3,13 +3,16 @@ import { aggregateGroups, hostIndex, mergeGroups, mergeSeen } from "../core/grou
 import { firstMatch } from "../core/glob.js";
 import { hostFromUrl, isLearnable, isLearnableName, learnedOwner, rootOf, underDeny } from "../core/hosts.js";
 import { reportEndpointHosts } from "../core/reporting.js";
+import { CONFLICT, SAME, answersOf, verdict } from "../core/routes.js";
 import { NO_LOG } from "./log.js";
 
 const MAX_LOADED = 500;
 const MAX_TRACKED = 2000;
 const BLOCKED = "net::ERR_BLOCKED_BY_CLIENT";
 const ABORTED = "net::ERR_ABORTED";
-const MAX_SKIPPED = 1000;
+const MAX_LOGGED = 1000;
+const MAX_CONFLICTS = 50;
+const MAX_ORIGINS = 256;
 const PROXY_FAILURE = /^net::ERR_(?:PROXY_|SOCKS_|TUNNEL_|MANDATORY_PROXY_|PAC_|HTTPS_PROXY_|UNEXPECTED_PROXY_)/;
 const MANDATORY = "net::ERR_MANDATORY_PROXY_CONFIGURATION_FAILED";
 const PAC_FAILED = "net::ERR_PAC_SCRIPT_FAILED";
@@ -18,7 +21,7 @@ const TAB = "tab:";
 
 const IGNORED_LIFECYCLES = new Set(["prerender", "cached", "pending_deletion"]);
 
-const blankTab = (host) => ({ host, navigation: 0, newHosts: 0, loaded: new Set(), proxied: new Set(), loading: false, incomplete: false, proxyError: null });
+const blankTab = (host) => ({ host, navigation: 0, newHosts: 0, loaded: new Set(), proxied: new Set(), loading: false, incomplete: false, proxyError: null, conflicts: [] });
 
 export function createLearner({ store, engine, session, tabs: browserTabs, now, log = NO_LOG }) {
   const tabs = new Map();
@@ -26,7 +29,7 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
   const pending = new Map();
   const observed = new Map();
   const seenThisSession = new Set();
-  let indexed = { groups: null, index: new Map() };
+  let indexed = { groups: null, index: new Map(), own: new Map() };
   let running = false;
   let failed = false;
   const dirty = new Set();
@@ -34,15 +37,60 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
   let pacFailure = null;
   const awaitingPac = new Map();
   const skipped = new Set();
+  const conflicted = new Set();
+  let answered = { state: null, answers: {} };
+  let origins = { roots: null, byOrigin: new Map() };
 
+  // Every group's records, and each root's own ones on demand; rebuilt only when the groups change.
   const indexOf = (groups) => {
-    if (indexed.groups !== groups) indexed = { groups, index: hostIndex(groups) };
+    if (indexed.groups !== groups) indexed = { groups, index: hostIndex(groups), own: new Map() };
     return indexed.index;
+  };
+
+  const ownIndexOf = (groups, mask) => {
+    indexOf(groups);
+    let own = indexed.own.get(mask);
+    if (own === undefined) {
+      own = new Set(Object.hasOwn(groups, mask) ? Object.keys(groups[mask].hosts) : []);
+      indexed.own.set(mask, own);
+    }
+    return own;
+  };
+
+  const answersOfState = (state) => {
+    if (answered.state !== state) answered = { state, answers: answersOf(state) };
+    return answered.answers;
+  };
+
+  // The group whose proxy carries a learned record, and whether the root may use it (core/routes.js).
+  const routeFor = (entry, mask, state) => {
+    const owner = indexOf(state.groups).get(entry)[0];
+    return { entry, owner, verdict: verdict(mask, owner, answersOfState(state)) };
+  };
+
+  // What a root learns for a host it does not know yet. Each root learns every host it needs itself, even one another
+  // root has learned; it then takes that root's record, so every root holding it shares one route.
+  const targetOf = (host, mask, state) => {
+    if (!Object.hasOwn(state.groups, mask)) return null;
+    const own = ownIndexOf(state.groups, mask);
+    if (learnedOwner(host, own, store.psl) !== null) return null;
+    const target = learnedOwner(host, indexOf(state.groups), store.psl) ?? host;
+    return isLearnable(target, state.analysis, own, store.psl) ? target : null;
+  };
+
+  const keyOf = (mask, host) => `${mask} ${host}`;
+
+  // Diagnostic events that would repeat on every request are logged once per key.
+  const firstTime = (keys, key) => {
+    if (keys.has(key)) return false;
+    if (keys.size >= MAX_LOGGED) keys.clear();
+    keys.add(key);
+    return true;
   };
 
   const persist = (items) => session.set(items).catch(() => undefined);
 
-  const record = (tab) => ({ ...tab, loaded: [...tab.loaded], proxied: [...tab.proxied] });
+  const record = (tab) => ({ ...tab, loaded: [...tab.loaded], proxied: [...tab.proxied], conflicts: [...tab.conflicts] });
 
   const writeTabs = async () => {
     writing = true;
@@ -103,6 +151,19 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
     changed(tabId);
   };
 
+  // A root holds a record that another root's proxy carries: the request is blocked for it, and a reload cannot help.
+  const markConflict = (source, { entry, owner }, state) => {
+    if (log.on && firstTime(conflicted, keyOf(source.mask, entry))) {
+      const answers = answersOfState(state);
+      log.add("conflict", { host: entry, root: source.mask, owner, proxy: answers[source.mask] ?? null, ownerProxy: answers[owner] ?? null, tabId: source.tabId });
+    }
+    if (source.tabId === null || !current(source.tabId, source.navigation)) return;
+    const tab = tabs.get(source.tabId);
+    if (tab.conflicts.length >= MAX_CONFLICTS || tab.conflicts.some((item) => item.host === entry && item.root === source.mask)) return;
+    tab.conflicts.push({ host: entry, root: source.mask, owner });
+    changed(source.tabId);
+  };
+
   // The first proxy failure of a load is kept, later ones are counted. chrome.proxy.onProxyError carries the PAC line
   // but no tab, and webRequest reports the same failure for the tab just before or just after it.
   const recentPac = () => (pacFailure !== null && now() - pacFailure.time <= PAC_HINT_MS ? pacFailure : null);
@@ -141,7 +202,7 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
 
   const count = (accepted) => {
     const counted = new Set();
-    for (const { tabId, navigation } of accepted.values()) {
+    for (const { tabId, navigation } of accepted) {
       if (tabId === null || !current(tabId, navigation)) continue;
       tabs.get(tabId).newHosts += 1;
       counted.add(tabId);
@@ -156,11 +217,22 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
     changed(tabId);
   };
 
+  // Pages make most of their requests from a handful of origins, so the root of each origin is kept at hand.
+  const originOf = (initiator, roots) => {
+    if (origins.roots !== roots || origins.byOrigin.size >= MAX_ORIGINS) origins = { roots, byOrigin: new Map() };
+    let found = origins.byOrigin.get(initiator);
+    if (found === undefined) {
+      const host = hostFromUrl(initiator);
+      found = { host, root: host === null ? null : rootOf(host, roots) };
+      origins.byOrigin.set(initiator, found);
+    }
+    return found;
+  };
+
   const attribute = ({ tabId, initiator }, roots) => {
     const inTab = tabId >= 0;
     const tab = inTab ? tabs.get(tabId) : undefined;
-    const origin = hostFromUrl(initiator);
-    const byOrigin = origin === null ? null : rootOf(origin, roots);
+    const { host: origin, root: byOrigin } = originOf(initiator, roots);
     const rootHost = byOrigin !== null ? origin : (tab?.host ?? null);
     const mask = byOrigin ?? (rootHost === null ? null : rootOf(rootHost, roots));
     if (mask === null) return null;
@@ -177,11 +249,7 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
   };
 
   const logSkipped = (host, mask, reason, tabId) => {
-    const key = `${mask} ${host}`;
-    if (skipped.has(key)) return;
-    if (skipped.size >= MAX_SKIPPED) skipped.clear();
-    skipped.add(key);
-    log.add("skipped", { host, root: mask, reason, tabId });
+    if (firstTime(skipped, keyOf(mask, host))) log.add("skipped", { host, root: mask, reason, tabId });
   };
 
   const routeOf = (host) => {
@@ -214,10 +282,10 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
   };
 
   const accept = (state, learn) => {
-    const index = indexOf(state.groups);
-    const accepted = new Map();
-    for (const [host, source] of learn) {
-      if (Object.hasOwn(state.groups, source.mask) && isLearnable(host, state.analysis, index, store.psl)) accepted.set(host, source);
+    const accepted = [];
+    for (const source of learn.values()) {
+      const host = targetOf(source.request, source.mask, state);
+      if (host !== null) accepted.push({ ...source, host });
     }
     return accepted;
   };
@@ -230,16 +298,25 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
       .filter(([, masks]) => masks.length > 0);
     const time = now();
     const nextSeen = observedNow.length > 0 ? mergeSeen(state.seen, observedNow, time) : state.seen;
-    if (accepted.size === 0) {
+    if (accepted.length === 0) {
       if (nextSeen !== state.seen) await store.commit({ ...state, seen: nextSeen });
       return;
     }
-    const { groups, seen: aggregatedSeen } = aggregateGroups(mergeGroups(state.groups, accepted, time), nextSeen, state.analysis, store.psl);
-    await engine.commit({ ...state, groups, seen: aggregatedSeen, appliedPac: buildSystemPac(state.userPac, groups, store.psl) });
-    count(accepted);
+    const batch = accepted.map((source) => [source.host, source]);
+    const { groups, seen: aggregatedSeen } = aggregateGroups(mergeGroups(state.groups, batch, time), nextSeen, state.analysis, store.psl);
+    const next = { ...state, groups, seen: aggregatedSeen, appliedPac: buildSystemPac(state.userPac, groups, store.psl) };
+    await engine.commit(next);
     if (log.on) {
-      for (const [host, { mask, rootHost, tabId }] of accepted) log.add("learned", { host, root: mask, rootHost, tabId });
+      for (const { host, mask, rootHost, tabId } of accepted) log.add("learned", { host, root: mask, rootHost, tabId });
     }
+    const fresh = [];
+    for (const source of accepted) {
+      const entry = learnedOwner(source.request, indexOf(next.groups), store.psl);
+      const route = entry === null ? null : routeFor(entry, source.mask, next);
+      if (route?.verdict === CONFLICT) markConflict(source, route, next);
+      else fresh.push(source);
+    }
+    count(fresh);
   };
 
   const commitSafely = async (learn, seen) => {
@@ -288,10 +365,25 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
     if (!running) flush();
   };
 
-  const enqueue = (host, source, state, index) => {
-    if (pending.has(host) || !isLearnable(host, state.analysis, index, store.psl)) return false;
-    pending.set(host, source);
+  const enqueue = (host, source, state) => {
+    const key = keyOf(source.mask, host);
+    if (pending.has(key) || targetOf(host, source.mask, state) === null) return false;
+    pending.set(key, { ...source, request: host });
     return true;
+  };
+
+  const observe = (host, masks) => {
+    let added = false;
+    for (const mask of masks) {
+      const key = keyOf(mask, host);
+      if (seenThisSession.has(key)) continue;
+      seenThisSession.add(key);
+      const entry = observed.get(host) ?? [];
+      entry.push(mask);
+      observed.set(host, entry);
+      added = true;
+    }
+    if (added) schedule();
   };
 
   return {
@@ -318,6 +410,8 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
 
     proxyError: (tabId) => tabs.get(tabId)?.proxyError ?? null,
 
+    conflicts: (tabId) => [...(tabs.get(tabId)?.conflicts ?? [])],
+
     pending: (tabId) => [...pending.values()].filter((source) => source.tabId === tabId).length,
 
     onCompleted(tabId, url) {
@@ -331,7 +425,7 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
       const items = await session.get(null);
       for (const host of items.seenThisSession ?? []) seenThisSession.add(host);
       for (const [key, tab] of Object.entries(items)) {
-        if (key.startsWith(TAB)) tabs.set(Number(key.slice(TAB.length)), { ...tab, loaded: new Set(tab.loaded), proxied: new Set(tab.proxied) });
+        if (key.startsWith(TAB)) tabs.set(Number(key.slice(TAB.length)), { ...tab, loaded: new Set(tab.loaded), proxied: new Set(tab.proxied), conflicts: tab.conflicts ?? [] });
       }
       if (tabs.size > 0) return;
       for (const { id, url } of await browserTabs.query({})) {
@@ -365,18 +459,23 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
         const via = underRoot ? null : learned !== null ? "proxy" : firstMatch(host, bypass) !== null ? "direct" : undefined;
         if (via !== undefined) track(details, { host, via, navigation: tab.navigation });
       }
-      if (learned !== null) {
-        if (!seenThisSession.has(learned)) {
-          seenThisSession.add(learned);
-          observed.set(learned, index.get(learned));
-          schedule();
-        }
+      if (underRoot) return;
+      const source = attribute(details, roots);
+      if (source === null) {
+        if (learned !== null) observe(learned, index.get(learned));
         return;
       }
-      const source = attribute(details, roots);
-      if (source === null) return;
-      if (!enqueue(host, source, state, index)) {
-        if (log.on && !underRoot && !pending.has(host)) logSkipped(host, source.mask, refusal(host, state.analysis), source.tabId);
+      // A root's own records are among all the records, so a host no root knows is new to this root too.
+      const own = learned === null ? null : learnedOwner(host, ownIndexOf(state.groups, source.mask), store.psl);
+      if (own !== null) {
+        observe(own, [source.mask]);
+        const route = routeFor(learned, source.mask, state);
+        if (route.verdict === CONFLICT) markConflict(source, route, state);
+        else if (route.verdict !== SAME && current(source.tabId, source.navigation)) markIncomplete(source.tabId);
+        return;
+      }
+      if (!enqueue(host, source, state)) {
+        if (log.on && !pending.has(keyOf(source.mask, host))) logSkipped(host, source.mask, refusal(host, state.analysis), source.tabId);
         return;
       }
       if (log.on) log.add("blocked", { host, root: source.mask, type: details.type, url: details.url, initiator: details.initiator ?? null, tabId: source.tabId });
@@ -399,9 +498,8 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
         source = attribute(details, roots);
       }
       if (source === null) return;
-      const index = indexOf(state.groups);
       const endpoint = { mask: source.mask, rootHost: source.rootHost, tabId: null, navigation: 0 };
-      const added = hosts.filter((host) => enqueue(host, endpoint, state, index));
+      const added = hosts.filter((host) => enqueue(host, endpoint, state));
       if (added.length === 0) return;
       if (log.on) for (const host of added) log.add("reported", { host, root: source.mask, url: details.url });
       schedule();

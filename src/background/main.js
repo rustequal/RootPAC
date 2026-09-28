@@ -8,6 +8,7 @@ import { createLog, LOG_CHANNEL, LOG_SETTING } from "./log.js";
 import { createLogDb } from "./logdb.js";
 import { createCommands } from "./messages.js";
 import { createProxy } from "./proxy.js";
+import { createResolver } from "./resolve.js";
 import { Store } from "./store.js";
 
 const ignore = () => undefined;
@@ -46,13 +47,9 @@ learner.onTabChange((tabId) => {
   badge.update(tabId).catch(ignore);
 });
 
-const commands = createCommands({
-  store,
-  engine,
-  checker: createChecker({ offscreen: chrome.offscreen, runtime: chrome.runtime }),
-  learner,
-  log,
-});
+const checker = createChecker({ offscreen: chrome.offscreen, runtime: chrome.runtime });
+const resolver = createResolver({ store, engine, checker, log });
+const commands = createCommands({ store, engine, checker, learner, log });
 const ready = logSetting
   .catch(ignore)
   .then(() => fetch(chrome.runtime.getURL("vendor/public_suffix_list.dat")))
@@ -65,6 +62,7 @@ const ready = logSetting
   .then(() => engine.check());
 
 ready.then(() => badge.start()).catch(ignore);
+ready.then(() => resolver.schedule()).catch(ignore);
 
 ready.then(
   () => chrome.storage.session.remove(["startupError"]),
@@ -137,7 +135,9 @@ const badgeKeys = (changes) =>
   );
 
 chrome.storage.onChanged.addListener(
-  whenReady((changes) => {
+  whenReady((changes, area) => {
+    // A root gets its rootHost with its first learned host; its proxy is checked then.
+    if (area === "local" && Object.keys(changes).some((key) => key.startsWith("group:") || key === "enabled")) resolver.schedule();
     if (badgeKeys(changes)) return badge.refresh();
   }),
 );

@@ -25,7 +25,7 @@ The difference in one line: `deny` is "don't let it through", `bypass` is "let i
 For every request the System PAC checks these conditions in order:
 
 1. **`root` mask** — your `FindProxyForURL` is called and `DIRECT` is stripped from its answer; if no proxy is left, the PAC throws and the request is not sent.
-2. **Learned host** — follows the rule of its root. This decision applies to the whole browser, not only to the root tab. A learned entry covers its subdomains; the exception is a public suffix such as `github.io` or `s3.amazonaws.com`: such an entry applies only to that exact host, so it does not pull every site in the zone into the proxy.
+2. **Learned host** — follows the rule of its root. This decision applies to the whole browser, not only to the root tab. A learned entry covers its subdomains; the exception is a public suffix such as `github.io` or `s3.amazonaws.com`: such an entry applies only to that exact host, so it does not pull every site in the zone into the proxy. A host learned by several roots follows the rule of the first of them in alphabetical order of the masks (see [Shared hosts and proxy conflicts](#shared-hosts-and-proxy-conflicts)).
 3. **`bypass` mask** — `DIRECT` without calling your PAC.
 4. **Everything else** — your `FindProxyForURL` as is.
 
@@ -69,7 +69,24 @@ if (root(host, "instagram.com")) return NL;   // personal account, needs a forei
 
 To add a site, add such a line. To remove a site, delete it: its group of learned hosts disappears from the System PAC by itself, and its blocking rules are removed too.
 
-A few practical notes. The order of lines does not affect routing as long as masks do not overlap, so sort them however reads best. If two sites share a CDN, it is learned in only one group — the one whose page requested it first; routing is not affected, because both roots go through the proxy anyway. And do not declare a root on a domain already covered by `bypass` unless you know why: the root wins, and you get the proxy where you expected a direct connection.
+A few practical notes. The order of lines does not affect routing as long as masks do not overlap, so sort them however reads best. If two sites share a CDN, each of them learns it into its own group; with one proxy for all roots, as in the template below, that is all there is to it. With several proxies, read the next section. And do not declare a root on a domain already covered by `bypass` unless you know why: the root wins, and you get the proxy where you expected a direct connection.
+
+### Shared hosts and proxy conflicts
+
+A PAC sees only the host of a request, never the tab that makes it. So a host has one route for the whole browser, however many roots need it. Take two roots on two proxies that both load `fbcdn.net`:
+
+```js
+if (root(host, "facebook.com")) return PROXY1;
+if (root(host, "instagram.com")) return PROXY2;
+```
+
+Each root learns `fbcdn.net` on its own: a host another root has learned is still blocked in this root's pages until this root learns it too. The System PAC routes the host by the first of its groups in alphabetical order of the masks, here `facebook.com`, so `fbcdn.net` goes through PROXY1. For `instagram.com` that would mean its pages talking to `fbcdn.net` through the other proxy, so the extension blocks the host in `instagram.com` pages instead. That is a **proxy conflict**: the icon turns amber with `!`, the popup names the host, both roots and both proxies, and the diagnostic log records a **Proxy conflict** error. A reload does not help.
+
+Which proxy a root uses is found by a trial run of your User PAC for the root's host, on every save and whenever a root learns its first host. Until then the root's shared hosts are blocked for it, and the page asks for a reload. Two roots whose PAC gives the same answer share their hosts freely.
+
+To resolve a conflict, either give both roots the same proxy, or remove the host from one of the groups in the System PAC viewer. Removing it from the root it is blocked for only lasts until that root learns it again; removing it from the root that routes it moves the route to the other root, and then the conflict moves with it.
+
+A request belongs to the root of the frame or worker that makes it, and to the root of the page otherwise: an `instagram.com` frame embedded in a `facebook.com` page learns and loads its hosts as `instagram.com`.
 
 ### Template
 
@@ -124,7 +141,7 @@ You should still declare them as roots. Without `root()`, the first request to t
 
 An extra root is cheap: an empty group and one regex allow rule. There is a single blocking rule for all roots, and it does not grow with new masks. The DNR limit is 1000 regex rules for roots and bypass combined, so a hundred sites plus a dozen shorteners fit with room to spare.
 
-Learning is shared between roots: allow rules for learned hosts are not tied to a root, and the System PAC looks up all groups at once. If a shortener does load a host already learned under the target site, that host is allowed and goes through the proxy without a separate learning cycle.
+Learning is per root: allow rules for learned hosts are tied to their root, while the System PAC looks up all groups at once. If a shortener does load a host already learned under the target site, the shortener learns it too, with one extra reload.
 
 Three rules in practice. Give a shortener the same exit as its target site, otherwise the redirect crosses exits: the first request from one IP, the target page from another — an extra risk for sites with session pinning and anti-bot checks. A single line `root(host, "youtu.be")` covers both the shortener and its subdomains, should any appear. If the shortener's apex is a real site with content, like bit.ly, the same line makes it learn like any other root.
 
@@ -138,11 +155,11 @@ A new root site is learned within one to three reloads: on the first one its thi
 
 **Options** is the User PAC editor. **Save** runs the checks: parsing, static analysis and a trial run in the sandbox; errors are listed as `line:column message`, and clicking an error moves the cursor there. **Revert** restores the saved text, **Cancel** aborts a check that takes too long. `Ctrl+S` saves from anywhere on the page, Tab inserts two spaces. Below are **Export** and **Import** for backups (the User PAC together with the learned groups), the **Record a diagnostic log** switch and a link to the System PAC viewer.
 
-**Diagnostic log** (the **Log** button in the popup, or **Open the log** in Options). It records only while **Record a diagnostic log** is on; with it off the extension does no logging work. Recorded are: loads of root pages, new hosts blocked and queued for learning, hosts learned into a group, hosts a root page requested that are not learned (`deny`, `bypass`), every request that failed at the proxy — the host, the error, the route (root, learned in which group, `bypass` or the User PAC's own route), the tab and the page that requested it — other errors of requests from root pages, protection turning on and off, and changes made in Options and the viewer. At the top, **Proxy failures by host** sums the failures up: when every host fails at once the proxy itself is unreachable; when a few hosts keep failing while the rest load, the proxy cannot reach those hosts. Click a host to see its events. The events can be filtered by kind and text, exported as a text file and cleared. The last 5000 events are kept; they survive a browser restart. The filter kinds are **Errors**, **Learning** (new hosts blocked, learned or left out of learning), **Pages** (loads of root pages) and **State and configuration**. Times are local and in Chrome's own format, which follows the language of the Chrome interface (extensions cannot read the regional format of the OS); an exported log names the time zone in its first line.
+**Diagnostic log** (the **Log** button in the popup, or **Open the log** in Options). It records only while **Record a diagnostic log** is on; with it off the extension does no logging work. Recorded are: loads of root pages, new hosts blocked and queued for learning, hosts learned into a group, hosts a root page requested that are not learned (`deny`, `bypass`), proxy conflicts between roots and the proxy each root was checked to use, every request that failed at the proxy — the host, the error, the route (root, learned in which group, `bypass` or the User PAC's own route), the tab and the page that requested it — other errors of requests from root pages, protection turning on and off, and changes made in Options and the viewer. At the top, **Proxy failures by host** sums the failures up: when every host fails at once the proxy itself is unreachable; when a few hosts keep failing while the rest load, the proxy cannot reach those hosts. Click a host to see its events. The events can be filtered by kind and text, exported as a text file and cleared. The last 5000 events are kept; they survive a browser restart. The filter kinds are **Errors**, **Learning** (new hosts blocked, learned or left out of learning), **Pages** (loads of root pages) and **State and configuration**. Times are local and in Chrome's own format, which follows the language of the Chrome interface (extensions cannot read the regional format of the OS); an exported log names the time zone in its first line.
 
 **System PAC viewer** shows the generated PAC read-only with **Copy** and **Download** buttons, and the groups by root below it. Click a group to expand it: host, first seen, last seen and **Remove** for a single entry, **Clear group** for the whole group. The filter searches by host substring and expands the matching groups. At the bottom is a link to the User PAC editor.
 
-**Icon.** Blue-grey — an ordinary tab. Green with a red badge — a root tab; the badge shows how many learned hosts went through the proxy on this page. Amber — new hosts were learned on this load, a reload is needed. Grey with `!` — the proxy is off: the extension is in safe mode or another extension has taken over the proxy setting.
+**Icon.** Blue-grey — an ordinary tab. Green with a red badge — a root tab; the badge shows how many learned hosts went through the proxy on this page. Amber — new hosts were learned on this load, a reload is needed. Amber with `!` — a proxy conflict or a proxy failure on this page; the popup says which. Grey with `!` — the proxy is off: the extension is in safe mode or another extension has taken over the proxy setting.
 
 **Turning it off.** There is deliberately no off switch in the interface: it would remove both the proxy and the blocking, opening direct connections with one accidental click. Disable the extension in `chrome://extensions`.
 
@@ -150,6 +167,7 @@ A new root site is learned within one to three reloads: on the first one its thi
 
 - **The root page does not open at all.** Most likely the proxy is unreachable: the PAC is installed with `mandatory: true`, and when the proxy fails the browser does not fall back to a direct connection but shows an error. This is protection, not a malfunction.
 - **The site still does not work after several reloads.** Check the new hosts line in the popup: if it never goes away, the site keeps requesting new names. Look in the viewer — the host you need may be covered by `deny`.
+- **Amber icon with `!` and a proxy conflict in the popup.** Two roots on different proxies need the same host, and the host goes through the other root's proxy, so it is blocked for this one. See [Shared hosts and proxy conflicts](#shared-hosts-and-proxy-conflicts).
 - **A resource keeps going direct.** Check your `bypass` masks: one of them may cover its zone.
 - **Grey icon with `!`.** Another extension has taken over the proxy setting, or the saved User PAC is invalid and the extension is in safe mode — in that case Options already shows the list of errors.
 - **Pages fail with `net::ERR_SOCKS_CONNECTION_FAILED` or another proxy error.** Turn on **Record a diagnostic log** in Options, reproduce the failure and open the log: **Proxy failures by host** shows which hosts failed and how often.
