@@ -8,18 +8,35 @@ const groupsBox = document.getElementById("groups");
 const filter = document.getElementById("filter");
 const errorBox = document.getElementById("error");
 
-let state = { appliedPac: "", groups: new Map(), seen: new Map() };
+let state = { appliedPac: "", groups: new Map(), seen: new Map(), routes: {} };
 const open = new Set();
 
-function hostRows(mask, hosts, seen, needle) {
-  const table = element("table");
+// Which proxy a host goes through for this root: its own, another root's that is the same, or another root's that is
+// not, in which case the host is blocked for this root (a proxy conflict).
+function routeCell({ owner, verdict, ownerProxy } = {}) {
+  if (owner === undefined) return element("td", "muted", "own proxy");
+  if (verdict === "same") return element("td", "muted", `same proxy as ${owner}`);
+  if (verdict === "unchecked") return element("td", "warn", `${owner} · proxies not checked yet · blocked here`);
+  const cell = element("td", "error", `${owner}${ownerProxy === null ? "" : ` · ${ownerProxy}`} · blocked here`);
+  cell.title = `Proxy conflict: the host goes through the proxy of ${owner}, so it is blocked for this root`;
+  return cell;
+}
+
+function blockedCount(route) {
+  return route?.shared.filter(({ verdict }) => verdict === "conflict").length ?? 0;
+}
+
+function hostRows(mask, hosts, seen, needle, route) {
+  const shared = new Map((route?.shared ?? []).map((item) => [item.host, item]));
+  const table = element("table", "hosts");
   const head = element("tr");
-  for (const label of ["Host", "First seen", "Last seen", ""]) head.append(element("th", undefined, label));
+  for (const label of ["Host", "Route", "First seen", "Last seen", ""]) head.append(element("th", undefined, label));
   table.append(head);
   for (const host of Object.keys(hosts).sort()) {
     if (needle !== "" && !host.includes(needle)) continue;
     const row = element("tr");
     row.append(element("td", "host", host));
+    row.append(routeCell(shared.get(host)));
     row.append(element("td", "muted", formatTime(hosts[host])));
     row.append(element("td", "muted", seen[host] === undefined ? "—" : formatTime(seen[host])));
     const cell = element("td");
@@ -38,6 +55,16 @@ function hostRows(mask, hosts, seen, needle) {
     row.append(cell);
     table.append(row);
   }
+  // Records of other roots under this root's records decide the route of the names under them, and are blocked here
+  // when their proxy differs.
+  for (const item of route?.shared ?? []) {
+    if (Object.hasOwn(hosts, item.host) || item.verdict === "same" || (needle !== "" && !item.host.includes(needle))) continue;
+    const row = element("tr");
+    const cell = element("td", "host", item.host);
+    cell.append(element("span", "muted", ` learned by ${item.owner}`));
+    row.append(cell, routeCell(item), element("td", "muted", "—"), element("td", "muted", "—"), element("td"));
+    table.append(row);
+  }
   return table;
 }
 
@@ -50,13 +77,18 @@ function renderGroups() {
   const boxes = [];
   for (const [mask, group] of [...state.groups.entries()].sort()) {
     const hosts = Object.keys(group.hosts);
-    const matches = needle === "" ? hosts : hosts.filter((host) => host.includes(needle));
-    if (needle !== "" && matches.length === 0) continue;
+    const route = state.routes[mask];
+    const names = [...hosts, ...(route?.shared ?? []).filter(({ verdict }) => verdict !== "same").map(({ host }) => host)];
+    if (needle !== "" && !names.some((host) => host.includes(needle))) continue;
     const box = element("details");
     box.open = needle !== "" || open.has(mask);
     const summary = element("summary");
     summary.append(element("span", "mask", mask));
-    summary.append(element("span", "muted grow", `${group.rootHost ?? "no root host yet"} · ${hosts.length} host${hosts.length === 1 ? "" : "s"}`));
+    const proxy = group.rootHost === null ? "" : ` · ${route?.proxy ?? "proxy not checked yet"}`;
+    const info = element("span", "muted grow", `${group.rootHost ?? "no root host yet"}${proxy} · ${hosts.length} host${hosts.length === 1 ? "" : "s"}`);
+    const blocked = blockedCount(route);
+    if (blocked > 0) info.append(element("span", "error", ` · ${blocked} blocked by a proxy conflict`));
+    summary.append(info);
     const clear = element("button", "small", "Clear group");
     clear.addEventListener("click", async (event) => {
       event.preventDefault();
@@ -76,17 +108,18 @@ function renderGroups() {
         else open.delete(mask);
       }
       if (!box.open) return;
-      box.replaceChildren(summary, hostRows(mask, group.hosts, state.seen.get(mask) ?? {}, needle));
+      box.replaceChildren(summary, hostRows(mask, group.hosts, state.seen.get(mask) ?? {}, needle, route));
     });
-    if (box.open) box.append(hostRows(mask, group.hosts, state.seen.get(mask) ?? {}, needle));
+    if (box.open) box.append(hostRows(mask, group.hosts, state.seen.get(mask) ?? {}, needle, route));
     boxes.push(box);
   }
   groupsBox.replaceChildren(...(boxes.length === 0 ? [element("p", "muted", "No groups")] : boxes));
 }
 
 async function render() {
-  const stored = await readLocal(null);
+  const [stored, routes] = await Promise.all([readLocal(null), send({ type: "getRoutes" }).catch(() => null)]);
   state = {
+    routes: routes?.ok ? routes.roots : {},
     appliedPac: stored.appliedPac ?? "",
     userPac: stored.userPac,
     groups: new Map(Object.entries(stored).filter(([key]) => key.startsWith("group:")).map(([key, value]) => [key.slice(6), value])),
@@ -106,7 +139,7 @@ document.getElementById("copy").addEventListener("click", async () => {
 document.getElementById("download").addEventListener("click", () => download("rootpac.pac", state.appliedPac, "application/x-ns-proxy-autoconfig"));
 filter.addEventListener("input", renderGroups);
 let refresh = 0;
-const VIEWED = new Set(["appliedPac", "userPac", "analysis"]);
+const VIEWED = new Set(["appliedPac", "userPac", "analysis", "proxies"]);
 
 onStored((changes) => {
   if (!Object.keys(changes).some((key) => VIEWED.has(key) || key.startsWith("group:") || key.startsWith("seen:"))) return;

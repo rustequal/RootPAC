@@ -3,7 +3,7 @@ import { exportBackup, readBackup } from "../core/backup.js";
 import { buildSystemPac } from "../core/build.js";
 import { rootOf } from "../core/hosts.js";
 import { adoptLegacyGroups, aggregateGroups, pruneSeen, reconcileGroups } from "../core/groups.js";
-import { answersOf, proxiesOf } from "../core/routes.js";
+import { answersOf, proxiesOf, sharedRoutes } from "../core/routes.js";
 import { trialAnswers, trialErrors, trialPlan } from "../core/trial.js";
 import { NO_LOG } from "./log.js";
 
@@ -121,7 +121,9 @@ export function createCommands({ store, engine, checker, learner, log = NO_LOG }
     };
   };
 
-  const handlers = { saveUserPac, setEnabled, removeHost, clearGroup, getTabState, exportState, importState, cancelCheck };
+  const getRoutes = async () => ({ ok: true, roots: sharedRoutes(store.state, store.psl) });
+
+  const handlers = { saveUserPac, setEnabled, removeHost, clearGroup, getTabState, getRoutes, exportState, importState, cancelCheck };
 
   // What a command changed, for the diagnostic log; read-only commands are not logged.
   const userPac = (message, response) => (response.ok ? { roots: response.analysis.roots.length } : { problems: response.errors?.length ?? 0, error: response.error });

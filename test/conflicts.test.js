@@ -182,3 +182,17 @@ test("removing the host from the conflicting root lets it learn again", async ()
   assert.deepEqual(conflictsOf(store.state), []);
   assert.equal(allowed(browser, "scontent.fbcdn.net", "instagram.com"), false);
 });
+
+test("the viewer gets each root's proxy and the records it takes from another root", async () => {
+  const different = await shared(userPac("PROXY fb:1", "PROXY ig:1"));
+  assert.deepEqual(await different.commands.dispatch({ type: "getRoutes" }), {
+    ok: true,
+    roots: {
+      "facebook.com": { proxy: "PROXY fb:1", shared: [] },
+      "instagram.com": { proxy: "PROXY ig:1", shared: [{ host: "fbcdn.net", owner: "facebook.com", verdict: "conflict", ownerProxy: "PROXY fb:1" }] },
+    },
+  });
+  const same = await shared(userPac("PROXY fb:1", "PROXY fb:1"));
+  const { roots } = await same.commands.dispatch({ type: "getRoutes" });
+  assert.deepEqual(roots["instagram.com"].shared, [{ host: "fbcdn.net", owner: "facebook.com", verdict: "same", ownerProxy: "PROXY fb:1" }]);
+});

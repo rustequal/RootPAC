@@ -1,6 +1,5 @@
 import { CLOSED_TEXT, INCOGNITO_TEXT, element, formatTime, incognitoAllowed, onStored, proxyErrorText, readLocal, send } from "../shared/rpc.js";
 import { header } from "../shared/logo.js";
-import { conflictText } from "../log/entries.js";
 
 const box = document.getElementById("state");
 const banners = document.getElementById("banners");
@@ -15,7 +14,47 @@ async function activeTabId() {
 }
 
 function banner(text, className = "banner") {
-  banners.append(element("p", className, text));
+  const node = element("p", className, text);
+  node.title = text;
+  banners.append(node);
+}
+
+// Chrome shows at most 600 px of a popup and scrolls the rest. When the messages do not fit, their explanations go
+// first and then their text is cut to two lines, then to one, then the page counters to one line each; the full text
+// of each message stays in its tooltip.
+const MAX_HEIGHT = 600;
+const FITS = ["tight", "tighter", "tightest"];
+
+function fit() {
+  document.body.classList.remove(...FITS);
+  for (const level of FITS) {
+    if (document.body.getBoundingClientRect().height <= MAX_HEIGHT) return;
+    document.body.classList.add(level);
+  }
+}
+
+// Blocked hosts are listed by the root whose proxy carries them; a few names each, the rest are in System PAC.
+const LISTED_HOSTS = 3;
+
+function conflictBanner(conflicts) {
+  const node = element("div", "banner error");
+  const plural = conflicts.length === 1 ? "" : "s";
+  node.append(element("div", "title", `Proxy conflict: ${conflicts.length} host${plural} blocked on this root`));
+  const owners = Map.groupBy(conflicts, ({ owner }) => owner);
+  const list = element("ul");
+  for (const [owner, items] of owners) {
+    const item = element("li");
+    const hosts = items.slice(0, LISTED_HOSTS).map(({ host }) => host).join(", ");
+    const more = items.length > LISTED_HOSTS ? ` and ${items.length - LISTED_HOSTS} more` : "";
+    item.append(`${owner}${items[0].ownerProxy === null ? "" : ` (${items[0].ownerProxy})`}: `, element("span", "mono", hosts), more);
+    list.append(item);
+  }
+  const { proxy } = conflicts[0];
+  const own = proxy === null ? "" : `This root uses ${proxy}. `;
+  const hint = `${own}A PAC sees the host, not the tab, so a host has one proxy for all roots: use one proxy for these roots, or remove the host from a group in System PAC.`;
+  node.title = hint;
+  node.append(list, element("div", "hint", hint));
+  banners.append(node);
 }
 
 function stat(count, label, className) {
@@ -31,37 +70,30 @@ function showState(state, tabId) {
     return;
   }
   const plural = (count) => (count === 1 ? "" : "s");
-  box.append(element("div", "mask", state.mask));
-  if (state.loaded > 0) box.append(stat(state.loaded, `host${plural(state.loaded)} loaded on this page`, "loaded"));
-  if (state.proxied > 0) box.append(stat(state.proxied, `host${plural(state.proxied)} routed through the proxy`, "proxied"));
-  const reload = () => {
-    const button = element("button", "small primary", "Reload");
-    button.addEventListener("click", async () => {
+  const head = element("div", "head");
+  head.append(element("div", "mask", state.mask));
+  // One Reload for whatever a reload can fix: a proxy failure, a load that raced protection, newly learned hosts.
+  const failed = state.proxyError !== null && state.proxyError !== undefined;
+  if (failed || state.incomplete || state.newHosts > 0) {
+    const reload = element("button", "small primary", "Reload");
+    reload.addEventListener("click", async () => {
       await chrome.tabs.reload(tabId);
       window.close();
     });
-    return button;
-  };
-  if (state.proxyError !== null && state.proxyError !== undefined) {
-    const { count } = state.proxyError;
-    const row = stat(count, `request${plural(count)} failed at the proxy`, "failed");
-    row.append(reload());
-    box.append(row);
+    head.append(reload);
   }
+  box.append(head);
+  if (state.loaded > 0) box.append(stat(state.loaded, `host${plural(state.loaded)} loaded on this page`, "loaded"));
+  if (state.proxied > 0) box.append(stat(state.proxied, `host${plural(state.proxied)} routed through the proxy`, "proxied"));
+  if (failed) box.append(stat(state.proxyError.count, `request${plural(state.proxyError.count)} failed at the proxy`, "failed"));
   if (state.incomplete) {
     const row = element("div", "stat learned");
-    row.append(element("span", "label", "Loaded before protection was ready — part of the page was blocked"), reload());
+    row.append(element("span", "label", "Loaded before protection was ready — part of the page was blocked"));
     box.append(row);
   }
   const conflicts = state.conflicts ?? [];
-  if (conflicts.length > 0) {
-    box.append(stat(conflicts.length, `host${plural(conflicts.length)} blocked by a proxy conflict`, "failed"));
-  }
-  if (state.newHosts > 0) {
-    const row = stat(state.newHosts, `new host${plural(state.newHosts)} blocked and learned`, "learned");
-    row.append(reload());
-    box.append(row);
-  }
+  if (conflicts.length > 0) box.append(stat(conflicts.length, `host${plural(conflicts.length)} blocked by a proxy conflict`, "failed"));
+  if (state.newHosts > 0) box.append(stat(state.newHosts, `new host${plural(state.newHosts)} blocked and learned`, "learned"));
   box.append(stat(state.hostCount, `host${plural(state.hostCount)} known for this root`, "total"));
 }
 
@@ -88,10 +120,7 @@ async function render() {
   const learnError = session.lastLearnError;
   if (learnError !== undefined) banner(`${formatTime(learnError.time)} — Learning failed: ${learnError.message}`, "banner error");
   const conflicts = state?.ok ? (state.conflicts ?? []) : [];
-  for (const conflict of conflicts) banner(`Proxy conflict: ${conflictText(conflict)}`, "banner error");
-  if (conflicts.length > 0) {
-    banner("A PAC cannot tell which tab asks, so a host has one proxy for every root. Give the roots the same proxy, or remove the host from one of the groups in System PAC.");
-  }
+  if (conflicts.length > 0) conflictBanner(conflicts);
   const error = state?.ok ? state.proxyError : null;
   if (error !== null && error !== undefined) {
     const failed = error.count > 1 ? ` (${error.count} requests failed on this page)` : "";
@@ -115,6 +144,7 @@ const refresh = () => {
       } catch (error) {
         banners.replaceChildren(element("p", "banner error", error.message));
       }
+      fit();
     } while (again);
     rendering = null;
   })();

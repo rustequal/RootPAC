@@ -148,8 +148,13 @@ button.small {
 }
 
 p.error,
-span.error {
+span.error,
+td.error {
   color: var(--error);
+}
+
+td.warn {
+  color: var(--warn-fg);
 }
 
 .banner.error {
@@ -301,6 +306,25 @@ td {
 
 td.host {
   font-family: var(--mono);
+  word-break: break-all;
+}
+
+/* The same columns in every group of the viewer. */
+table.hosts {
+  table-layout: fixed;
+}
+
+table.hosts th:nth-child(1) {
+  width: 30%;
+}
+
+table.hosts th:nth-child(3),
+table.hosts th:nth-child(4) {
+  width: 190px;
+}
+
+table.hosts th:nth-child(5) {
+  width: 110px;
 }
 
 input[type="search"] {
@@ -428,4 +452,122 @@ tr.level-error td.event {
 
 tr.level-warn td.event {
   color: var(--warn-fg);
+}
+
+/* Popup: Chrome caps it at 800 x 600 px, and everything it has to say must fit without a scroll bar. */
+body.popup {
+  width: 460px;
+  padding: 14px 16px 16px;
+}
+
+.popup header {
+  margin-bottom: 10px;
+}
+
+.popup .card {
+  padding: 10px 14px;
+}
+
+.popup .card .head {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.popup .card .mask {
+  margin-bottom: 0;
+}
+
+.popup .stat {
+  padding: 1px 0;
+}
+
+.popup .stat .num {
+  font-size: 18px;
+}
+
+.popup .stat.total {
+  margin-top: 5px;
+  padding-top: 7px;
+}
+
+.popup .banner {
+  margin-top: 6px;
+  padding: 7px 11px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.popup .actions {
+  margin-top: 12px;
+}
+
+.banner .title {
+  font-weight: 600;
+}
+
+.banner ul {
+  margin: 3px 0 4px;
+  padding-left: 18px;
+}
+
+.banner .mono {
+  font-size: 12.5px;
+}
+
+.banner .hint {
+  color: var(--muted);
+}
+
+.popup.tight .banner .hint {
+  display: none;
+}
+
+/* Overflow is clipped at the padding edge, so the vertical padding turns into a border for the cut text to end there. */
+.popup.tight .banner {
+  padding-top: 0;
+  padding-bottom: 0;
+  border-top-width: 7px;
+  border-bottom-width: 7px;
+}
+
+.popup.tight p.banner {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+.popup.tight .banner li {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.popup.tighter p.banner {
+  display: block;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.popup.tightest .stat .label {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.popup.tightest .stat.total {
+  display: none;
+}
+
+.popup.tightest .banner {
+  margin-top: 4px;
+  border-top-width: 4px;
+  border-bottom-width: 4px;
+}
+
+.popup.tightest .stat {
+  padding: 0;
 }

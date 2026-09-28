@@ -45,26 +45,42 @@ export function verdict(mask, owner, answers) {
   return answers[mask] === answers[owner] ? SAME : CONFLICT;
 }
 
-// For every root, each record that decides the route of a name it has learned, allowed or blocked: its own records
-// and every other group's record under one of them. Public suffix records match their exact name only, like in the
-// System PAC, so they neither cover other records nor count as covered for a root that does not hold them.
-export function routesOf(groups, answers, psl) {
+// Calls visit(mask, host, owner, verdict, exact) for every root and each record that decides the route of a name it
+// has learned: its own records and every other group's record under one of them. Public suffix records match their
+// exact name only, like in the System PAC, so they neither cover other records nor count as covered for a root that
+// does not hold them.
+function eachRoute(groups, answers, psl, visit) {
   const index = hostIndex(groups);
   const suffixes = new Set([...index.keys()].filter((host) => psl.isPublicSuffix(host)));
-  const routes = new Map(Object.keys(groups).map((mask) => [mask, { allow: [], deny: [], allowExact: [], denyExact: [] }]));
   for (const [host, masks] of index) {
     const holders = new Set(masks);
     for (let name = parentName(host); name !== null; name = parentName(name)) {
       if (index.has(name) && !suffixes.has(name)) for (const mask of index.get(name)) holders.add(mask);
     }
-    const exact = suffixes.has(host);
     // The System PAC indexes the groups in mask order and keeps the first group for each record.
     const owner = masks[0];
-    for (const mask of holders) {
-      const route = routes.get(mask);
-      if (verdict(mask, owner, answers) === SAME) (exact ? route.allowExact : route.allow).push(host);
-      else (exact ? route.denyExact : route.deny).push(host);
-    }
+    for (const mask of holders) visit(mask, host, owner, verdict(mask, owner, answers), suffixes.has(host));
   }
+}
+
+// What each root's DNR rules allow and block.
+export function routesOf(groups, answers, psl) {
+  const routes = new Map(Object.keys(groups).map((mask) => [mask, { allow: [], deny: [], allowExact: [], denyExact: [] }]));
+  eachRoute(groups, answers, psl, (mask, host, owner, result, exact) => {
+    const route = routes.get(mask);
+    if (result === SAME) (exact ? route.allowExact : route.allow).push(host);
+    else (exact ? route.denyExact : route.deny).push(host);
+  });
   return routes;
+}
+
+// For the viewer: each root's proxy and the records it uses through another root's route, sorted by host.
+export function sharedRoutes(state, psl) {
+  const answers = answersOf(state);
+  const roots = Object.fromEntries(Object.keys(state.groups).map((mask) => [mask, { proxy: answers[mask] ?? null, shared: [] }]));
+  eachRoute(state.groups, answers, psl, (mask, host, owner, result) => {
+    if (owner !== mask) roots[mask].shared.push({ host, owner, verdict: result, ownerProxy: answers[owner] ?? null });
+  });
+  for (const root of Object.values(roots)) root.shared.sort((a, b) => (a.host < b.host ? -1 : a.host > b.host ? 1 : 0));
+  return roots;
 }

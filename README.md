@@ -54,10 +54,10 @@ Chrome reads an unpacked extension directly from that folder, and the extension 
 
 ## Interface
 
-- **Popup** — the state of the current tab: how many hosts were loaded, how many went through the proxy, how many new ones were blocked for learning (with a **Reload** button).
+- **Popup** — the state of the current tab: how many hosts were loaded, how many went through the proxy, how many new ones were blocked for learning, which hosts a proxy conflict blocks (with a **Reload** button when a reload helps).
 - **Options** — the User PAC editor with checks on save, backup export and import, and the **Record a diagnostic log** switch.
 - **Diagnostic log** — off by default. When on, it records root page loads, new hosts blocked and learned, hosts left out of learning, proxy conflicts between roots, every proxy failure with the host that failed and its route, request errors in root pages, protection state and configuration changes; proxy failures are also summed up by host. The last 5000 events are kept in the browser (IndexedDB) and can be exported. With the switch off, nothing is recorded.
-- **System PAC viewer** — the applied PAC, read-only, and the learned groups by root; single hosts and whole groups can be removed.
+- **System PAC viewer** — the applied PAC, read-only, and the learned groups by root with each root's proxy and the route of every host, proxy conflicts included; single hosts and whole groups can be removed.
 - **Icon**: blue-grey — an ordinary tab; green with a badge — a root tab; amber — new hosts were learned, reload needed; amber with `!` — a proxy conflict or a proxy failure on the page; grey with `!` — the proxy is not applied (safe mode, or another extension has taken over the proxy setting).
 
 ## Development
