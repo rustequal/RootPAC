@@ -4,9 +4,9 @@ import { parentName } from "./hosts.js";
 // Which proxy carries a learned record, and which roots may use it.
 //
 // A PAC sees only the host, never the tab, so a record learned by several roots has one route: the System PAC asks
-// the User PAC on behalf of the root that learned the record first. A root whose own proxy is a different one must
-// not reach the record at all, or its pages would go out through another root's proxy: that is a proxy conflict.
-// Removing the record from the root that routes it hands the route to the next root that holds it.
+// the User PAC on behalf of the root that learned the record last, which Route here makes of any root (routeThrough).
+// A root whose own proxy is a different one must not reach the record at all, or its pages would go out through
+// another root's proxy: that is a proxy conflict.
 
 export const SAME = "same";
 export const UNCHECKED = "unchecked";
@@ -38,20 +38,40 @@ export function unchecked(state) {
   return Object.keys(state.groups).filter((mask) => state.groups[mask].rootHost !== null && !Object.hasOwn(answers, mask));
 }
 
-// The group that routes a record: the one that learned it first, the first in mask order on a tie. `masks` are the
+// The group that routes a record: the one that learned it last, the first in mask order on a tie. `masks` are the
 // groups that hold the record, in mask order.
 export function ownerOf(groups, masks, host) {
   let owner = masks[0];
-  for (const mask of masks) if (groups[mask].hosts[host] < groups[owner].hosts[host]) owner = mask;
+  for (const mask of masks) if (groups[mask].hosts[host] > groups[owner].hosts[host]) owner = mask;
   return owner;
 }
 
-// Every group with only the records it routes: what the System PAC needs.
+// Route here: the root's copy of the record becomes the latest learned, so its proxy carries the record. The groups
+// come back unchanged when the root routes the record already.
+export function routeThrough(groups, mask, host, now) {
+  const holders = Object.keys(groups).filter((name) => Object.hasOwn(groups[name].hosts, host)).sort();
+  if (ownerOf(groups, holders, host) === mask) return groups;
+  return { ...groups, [mask]: { rootHost: groups[mask].rootHost, hosts: { ...groups[mask].hosts, [host]: now } } };
+}
+
+// Every group with only the records it routes: what the System PAC needs. Only a group that holds a record another
+// group routes is copied; without shared records the groups come back as they are.
 export function routedGroups(groups) {
-  const routed = Object.fromEntries(Object.entries(groups).map(([mask, { rootHost }]) => [mask, { rootHost, hosts: {} }]));
+  const dropped = new Map();
   for (const [host, masks] of hostIndex(groups)) {
+    if (masks.length < 2) continue;
     const owner = ownerOf(groups, masks, host);
-    routed[owner].hosts[host] = groups[owner].hosts[host];
+    for (const mask of masks) {
+      if (mask === owner) continue;
+      if (!dropped.has(mask)) dropped.set(mask, new Set());
+      dropped.get(mask).add(host);
+    }
+  }
+  if (dropped.size === 0) return groups;
+  const routed = { ...groups };
+  for (const [mask, hosts] of dropped) {
+    const { rootHost, hosts: all } = groups[mask];
+    routed[mask] = { rootHost, hosts: Object.fromEntries(Object.entries(all).filter(([host]) => !hosts.has(host))) };
   }
   return routed;
 }

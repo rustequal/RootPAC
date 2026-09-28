@@ -12,19 +12,50 @@ let state = { appliedPac: "", groups: new Map(), seen: new Map(), routes: {} };
 const open = new Set();
 
 // Which proxy a host goes through for this root: its own, another root's that is the same, or another root's that is
-// not, in which case the host is blocked for this root (a proxy conflict).
-function routeCell({ owner, verdict, ownerProxy } = {}, blocked = []) {
+// not, in which case the host is blocked for this root (a proxy conflict) and Route here hands it to this root.
+function routeCell({ owner, verdict, ownerProxy } = {}, blocked = [], routeHere = null) {
+  const cell = element("td");
+  const box = element("div", "route");
+  const status = element("div", "status");
+  const line = (className, text, ...details) => {
+    status.append(element("div", className, text));
+    for (const detail of details) status.append(element("div", "detail", detail));
+  };
   if (owner === undefined && blocked.length > 0) {
-    const cell = element("td", "warn", `own proxy · blocked for ${blocked.join(", ")}`);
-    cell.title = `A proxy conflict: ${blocked.join(", ")} learned this host too, but it goes through this root's proxy. Remove it here to hand the route to ${blocked[0]}.`;
-    return cell;
+    line("warn", "own proxy", `blocked for ${blocked.join(", ")}`);
+    status.title = `A proxy conflict: ${blocked.join(", ")} learned this host too, but it goes through this root's proxy. Route here in the other group hands it over.`;
+  } else if (owner === undefined) {
+    line("muted", "own proxy");
+  } else if (verdict === "same") {
+    line("muted", `same proxy as ${owner}`);
+  } else if (verdict === "unchecked") {
+    line("warn", "blocked here", `via ${owner}`, "proxies not checked yet");
+  } else {
+    line("error", "blocked here", `via ${owner}`, ...(ownerProxy === null ? [] : [ownerProxy]));
+    status.title = `A proxy conflict: the host goes through the proxy of ${owner}, so it is blocked for this root.`;
   }
-  if (owner === undefined) return element("td", "muted", "own proxy");
-  if (verdict === "same") return element("td", "muted", `same proxy as ${owner}`);
-  if (verdict === "unchecked") return element("td", "warn", `${owner} · proxies not checked yet · blocked here`);
-  const cell = element("td", "error", `${owner}${ownerProxy === null ? "" : ` · ${ownerProxy}`} · blocked here`);
-  cell.title = `A proxy conflict: the host goes through the proxy of ${owner}, so it is blocked for this root. Remove it from ${owner} to route it through this root's proxy.`;
+  box.append(status);
+  if (verdict === "conflict" && routeHere !== null) {
+    const button = element("button", "small", "Route here");
+    button.title = `Send this host through this root's proxy; ${owner} keeps it, blocked, until you route it back`;
+    button.addEventListener("click", () => routeHere(button));
+    box.append(button);
+  }
+  cell.append(box);
   return cell;
+}
+
+// A button that sends a command, stays disabled while it runs and reports a failure; a change redraws the page.
+async function run(button, message) {
+  button.disabled = true;
+  try {
+    const result = await send(message);
+    if (!result.ok) showMessage(result.error);
+  } catch (error) {
+    showMessage(error.message);
+  } finally {
+    button.disabled = false;
+  }
 }
 
 function blockedCount(route) {
@@ -35,27 +66,18 @@ function hostRows(mask, hosts, seen, needle, route) {
   const shared = new Map((route?.shared ?? []).map((item) => [item.host, item]));
   const table = element("table", "hosts");
   const head = element("tr");
-  for (const label of ["Host", "Route", "First seen", "Last seen", ""]) head.append(element("th", undefined, label));
+  for (const label of ["Host", "Route", "Learned", "Last seen", ""]) head.append(element("th", undefined, label));
   table.append(head);
   for (const host of Object.keys(hosts).sort()) {
     if (needle !== "" && !host.includes(needle)) continue;
     const row = element("tr");
     row.append(element("td", "host", host));
-    row.append(routeCell(shared.get(host), route?.blocks[host]));
+    row.append(routeCell(shared.get(host), route?.blocks[host], (button) => run(button, { type: "routeHere", mask, hosts: [host] })));
     row.append(element("td", "muted", formatTime(hosts[host])));
     row.append(element("td", "muted", seen[host] === undefined ? "—" : formatTime(seen[host])));
     const cell = element("td");
     const remove = element("button", "small", "Remove");
-    remove.addEventListener("click", async () => {
-      remove.disabled = true;
-      try {
-        const result = await send({ type: "removeHost", mask, host });
-        if (!result.ok) throw new Error(result.error);
-      } catch (error) {
-        remove.disabled = false;
-        showMessage(error.message);
-      }
-    });
+    remove.addEventListener("click", () => run(remove, { type: "removeHost", mask, host }));
     cell.append(remove);
     row.append(cell);
     table.append(row);

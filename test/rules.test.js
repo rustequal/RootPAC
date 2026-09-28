@@ -179,7 +179,8 @@ test("requests to a root from any context are blocked until the root allowance l
 });
 
 const TWO = { roots: ["a.com", "b.com"], deny: [], bypass: [] };
-const SHARED = { "a.com": { rootHost: "www.a.com", hosts: { "cdn.net": 1 } }, "b.com": { rootHost: "www.b.com", hosts: { "cdn.net": 2, "img.org": 3 } } };
+// a.com learned cdn.net last, so its proxy routes it.
+const SHARED = { "a.com": { rootHost: "www.a.com", hosts: { "cdn.net": 4 } }, "b.com": { rootHost: "www.b.com", hosts: { "cdn.net": 2, "img.org": 3 } } };
 const allowOf = (policy, root) => policy.contexts.find((item) => item.root === root);
 
 test("a record learned by roots on the same proxy is allowed for each of them", () => {

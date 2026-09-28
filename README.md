@@ -57,7 +57,7 @@ Chrome reads an unpacked extension directly from that folder, and the extension 
 - **Popup** — the state of the current tab: how many hosts were loaded, how many went through the proxy, how many new ones were blocked for learning, which hosts a proxy conflict blocks (with a **Reload** button when a reload helps).
 - **Options** — the User PAC editor with checks on save, backup export and import, and the **Record a diagnostic log** switch.
 - **Diagnostic log** — off by default. When on, it records root page loads, new hosts blocked and learned, hosts left out of learning, proxy conflicts between roots, every proxy failure with the host that failed and its route, request errors in root pages, protection state and configuration changes; proxy failures are also summed up by host. The last 5000 events are kept in the browser (IndexedDB) and can be exported. With the switch off, nothing is recorded.
-- **System PAC viewer** — the applied PAC, read-only, and the learned groups by root with each root's proxy and the route of every host, proxy conflicts included; single hosts and whole groups can be removed.
+- **System PAC viewer** — the applied PAC, read-only, and the learned groups by root with each root's proxy and the route of every host, proxy conflicts included, with **Route here** to choose the root a shared host goes through; single hosts and whole groups can be removed.
 - **Icon**: blue-grey — an ordinary tab; green with a badge — a root tab; amber — new hosts were learned, reload needed; amber with `!` — a proxy conflict or a proxy failure on the page; grey with `!` — the proxy is not applied (safe mode, or another extension has taken over the proxy setting).
 
 ## Development
@@ -103,7 +103,7 @@ docs/USER-GUIDE.md   user guide
 
 - `preconnect` and `preload` from an Early Hints (`103`) response are invisible to DNR. Such connections are covered only by the route in your User PAC.
 - A `bypass` host sees your real IP, even when a root page requests it. This is a deliberate trade-off.
-- A host needed by roots on different proxies can go through only one of them: the PAC sees the host, not the tab. It works for the root that learned it first and is blocked for the others (a proxy conflict); removing it from that root in the System PAC viewer hands it to the next one. Which proxy a root uses is taken from a trial run of the User PAC in a sandbox, where `dnsResolve` answers nothing and `myIpAddress` is `127.0.0.1`; a User PAC that routes by those gets a different answer there than in the browser.
+- A host needed by roots on different proxies can go through only one of them: the PAC sees the host, not the tab. It works for the root that learned it last and is blocked for the others (a proxy conflict); **Route here**, in the popup or the System PAC viewer, hands it to another root, and every root keeps it learned. Which proxy a root uses is taken from a trial run of the User PAC in a sandbox, where `dnsResolve` answers nothing and `myIpAddress` is `127.0.0.1`; a User PAC that routes by those gets a different answer there than in the browser.
 - There is no off switch in the interface: one click would remove both the proxy and the blocking. Disable the extension in `chrome://extensions`.
 
 ## License

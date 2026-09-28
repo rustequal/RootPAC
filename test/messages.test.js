@@ -338,13 +338,13 @@ test("importState refuses bad backups without changing anything", async () => {
 test("saving and importing aggregate groups before the trial run", async () => {
   const hosts = { "a.img.org": 1, "b.img.org": 2 };
   const { area, commands, checker } = await setup({ ...TRAINED, "group:a.com": { rootHost: "www.a.com", hosts }, "seen:a.com": {} });
-  assert.deepEqual(area.items["group:a.com"].hosts, { "img.org": 1 });
+  assert.deepEqual(area.items["group:a.com"].hosts, { "img.org": 2 });
   assert.equal((await commands.dispatch({ type: "saveUserPac", text: TRAINED.userPac })).ok, true);
   assert.match(checker.requests.at(-1).code, /"img\.org": 1/);
   const target = await setup();
   const backup = { schemaVersion: 1, userPac: TRAINED.userPac, groups: { "a.com": { rootHost: "www.a.com", hosts }, "old.com": { rootHost: null, hosts: {} } } };
   assert.equal((await target.commands.dispatch({ type: "importState", backup })).ok, true);
-  assert.deepEqual(target.area.items["group:a.com"].hosts, { "img.org": 1 });
+  assert.deepEqual(target.area.items["group:a.com"].hosts, { "img.org": 2 });
 });
 
 test("a cancelled check answers with an error and changes nothing", async () => {

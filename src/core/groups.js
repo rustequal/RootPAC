@@ -144,7 +144,9 @@ function aggregateGroup(group, seen, analysis, psl) {
   for (const host of names) {
     const owner = widestOwner(host, owners, psl);
     if (owner !== host) changed = true;
-    hosts[owner] = Object.hasOwn(hosts, owner) ? Math.min(hosts[owner], group.hosts[host]) : group.hosts[host];
+    // A record's time is when its root learned it last, which decides the route of a record several roots hold
+    // (core/routes.js), so a widened record keeps the latest time of the records it takes in.
+    hosts[owner] = Object.hasOwn(hosts, owner) ? Math.max(hosts[owner], group.hosts[host]) : group.hosts[host];
     if (entries !== undefined && Object.hasOwn(seen, host)) entries[owner] = Object.hasOwn(entries, owner) ? Math.max(entries[owner], seen[host]) : seen[host];
   }
   return changed ? { hosts, entries } : { hosts: group.hosts, entries: seen };

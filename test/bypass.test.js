@@ -94,7 +94,7 @@ test("aggregation never produces a record matching or covering a bypass domain",
   const groups = { "a.com": { rootHost: "www.a.com", hosts: { "x.cdn.net": 1, "y.cdn.net": 2 } } };
   assert.equal(aggregateGroups(groups, {}, analysis, PSL).groups, groups);
   const allowed = aggregateGroups(groups, {}, { ...analysis, bypass: ["*.ru"] }, PSL);
-  assert.deepEqual(allowed.groups["a.com"].hosts, { "cdn.net": 1 });
+  assert.deepEqual(allowed.groups["a.com"].hosts, { "cdn.net": 2 });
 });
 
 test("DNR allows bypass masks by exact regex so the root block never stops them", () => {

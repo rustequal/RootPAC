@@ -9,6 +9,7 @@ import { covers, hostFromUrl, isHostName, isLearnable, learnedOwner, maskDomain,
 import { underLocalhost } from "../src/core/names.js";
 import { parsePublicSuffixList } from "../src/core/psl.js";
 import { buildRules, intersectPolicies, policyOf } from "../src/core/rules.js";
+import { routeThrough } from "../src/core/routes.js";
 
 const ROOT = new URL("../", import.meta.url);
 const PSL = parsePublicSuffixList(readFileSync(new URL("vendor/public_suffix_list.dat", ROOT), "utf8"));
@@ -80,7 +81,7 @@ function oracle(host, { roots, bypass }, groups) {
     const name = labels.slice(k).join(".");
     if (name.length > 253 || (k > 0 && PSL.isPublicSuffix(name))) continue;
     const holders = masks.filter((m) => Object.hasOwn(groups[m].hosts, name));
-    if (holders.length > 0) found = groups[holders.reduce((a, b) => (groups[b].hosts[name] < groups[a].hosts[name] ? b : a))];
+    if (holders.length > 0) found = groups[holders.reduce((a, b) => (groups[b].hosts[name] > groups[a].hosts[name] ? b : a))];
   }
   if (found !== null) return userDecision(found.rootHost, roots);
   return firstMatch(host, bypass) !== null ? "DIRECT" : userDecision(host, roots);
@@ -256,9 +257,16 @@ function fuzz(seed) {
         const masks = Object.keys(state.groups).filter((mask) => Object.keys(state.groups[mask].hosts).length > 0);
         if (masks.length === 0) continue;
         const mask = s.pick(masks);
-        const hosts = { ...state.groups[mask].hosts };
-        delete hosts[s.pick(Object.keys(hosts))];
-        state = { groups: { ...state.groups, [mask]: { rootHost: state.groups[mask].rootHost, hosts } }, seen: pruneSeen(state.seen, state.groups) };
+        const shared = [...hostIndex(state.groups)].filter(([, holders]) => holders.length > 1);
+        if (shared.length > 0 && random() < 0.5) {
+          // Route here: one holder of a shared record takes its route.
+          const [host, holders] = s.pick(shared);
+          state = { groups: routeThrough(state.groups, s.pick(holders), host, step), seen: state.seen };
+        } else {
+          const hosts = { ...state.groups[mask].hosts };
+          delete hosts[s.pick(Object.keys(hosts))];
+          state = { groups: { ...state.groups, [mask]: { rootHost: state.groups[mask].rootHost, hosts } }, seen: pruneSeen(state.seen, state.groups) };
+        }
       } else {
         try {
           const read = readBackup(JSON.parse(JSON.stringify(exportBackup({ userPac, groups: state.groups }))));

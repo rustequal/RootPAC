@@ -157,6 +157,38 @@ td.warn {
   color: var(--warn-fg);
 }
 
+/* A route: its state, a detail line under it, and the button that settles a conflict on the right. */
+div.route {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+div.route .status {
+  min-width: 9em;
+  line-height: 1.35;
+}
+
+div.route .status > .warn {
+  color: var(--warn-fg);
+}
+
+div.route .status > .error {
+  color: var(--error);
+}
+
+div.route .detail {
+  color: var(--muted);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
+div.route > button {
+  flex: none;
+}
+
 .banner.error {
   background: var(--error-bg);
   color: var(--error);
@@ -315,16 +347,16 @@ table.hosts {
 }
 
 table.hosts th:nth-child(1) {
-  width: 30%;
+  width: 22%;
 }
 
 table.hosts th:nth-child(3),
 table.hosts th:nth-child(4) {
-  width: 190px;
+  width: 19%;
 }
 
 table.hosts th:nth-child(5) {
-  width: 110px;
+  width: 104px;
 }
 
 input[type="search"] {
@@ -506,6 +538,17 @@ body.popup {
 
 .banner .title {
   font-weight: 600;
+}
+
+.banner > .head {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.banner > .head > button {
+  flex: none;
 }
 
 .banner ul {

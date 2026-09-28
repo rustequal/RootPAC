@@ -36,10 +36,28 @@ function fit() {
 // Blocked hosts are listed by the root whose proxy carries them; a few names each, the rest are in System PAC.
 const LISTED_HOSTS = 3;
 
-function conflictBanner(conflicts) {
+function conflictBanner(conflicts, mask, tabId) {
   const node = element("div", "banner error");
   const plural = conflicts.length === 1 ? "" : "s";
-  node.append(element("div", "title", `Proxy conflict: ${conflicts.length} host${plural} blocked on this root`));
+  const head = element("div", "head");
+  head.append(element("div", "title", `Proxy conflict: ${conflicts.length} host${plural} blocked`));
+  // Route here sends every blocked host of the page through this root's proxy and reloads the page to use them.
+  const routeHere = element("button", "small", "Route here");
+  routeHere.title = `Send ${conflicts.length === 1 ? "this host" : "these hosts"} through the proxy of ${mask}; the other roots keep them, blocked`;
+  routeHere.addEventListener("click", async () => {
+    routeHere.disabled = true;
+    try {
+      const result = await send({ type: "routeHere", mask, hosts: [...new Set(conflicts.map(({ host }) => host))] });
+      if (!result.ok) throw new Error(result.error);
+      await chrome.tabs.reload(tabId);
+      window.close();
+    } catch (error) {
+      routeHere.disabled = false;
+      banner(error.message, "banner error");
+    }
+  });
+  head.append(routeHere);
+  node.append(head);
   const owners = Map.groupBy(conflicts, ({ owner }) => owner);
   const list = element("ul");
   for (const [owner, items] of owners) {
@@ -51,8 +69,7 @@ function conflictBanner(conflicts) {
   }
   const { proxy } = conflicts[0];
   const own = proxy === null ? "" : `This root uses ${proxy}. `;
-  const from = owners.size === 1 ? `${conflicts[0].owner}'s group` : "the group of the root that routes it";
-  const hint = `${own}A PAC sees the host, not the tab, so a host has one proxy for all roots: use one proxy for these roots, or remove the host from ${from} in System PAC to route it here.`;
+  const hint = `${own}A PAC sees the host, not the tab, so a host has one proxy for all roots: Route here moves ${conflicts.length === 1 ? "it" : "them"} to this root's proxy and blocks the other roots instead, or use one proxy for these roots.`;
   node.title = hint;
   node.append(list, element("div", "hint", hint));
   banners.append(node);
@@ -121,7 +138,7 @@ async function render() {
   const learnError = session.lastLearnError;
   if (learnError !== undefined) banner(`${formatTime(learnError.time)} — Learning failed: ${learnError.message}`, "banner error");
   const conflicts = state?.ok ? (state.conflicts ?? []) : [];
-  if (conflicts.length > 0) conflictBanner(conflicts);
+  if (conflicts.length > 0) conflictBanner(conflicts, state.mask, tabId);
   const error = state?.ok ? state.proxyError : null;
   if (error !== null && error !== undefined) {
     const failed = error.count > 1 ? ` (${error.count} requests failed on this page)` : "";

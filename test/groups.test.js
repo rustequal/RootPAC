@@ -117,7 +117,7 @@ const one = (hosts, rootHost = "www.a.com") => ({ "a.com": { rootHost, hosts }, 
 
 test("two hosts with one registrable domain collapse into it", () => {
   const { groups, seen } = agg(one({ "x.cdn.net": 5, "y.z.cdn.net": 3, "keep.other.org": 9 }), { "a.com": { "x.cdn.net": 7, "y.z.cdn.net": 8, "keep.other.org": 1 } });
-  assert.deepEqual(groups["a.com"].hosts, { "keep.other.org": 9, "cdn.net": 3 });
+  assert.deepEqual(groups["a.com"].hosts, { "keep.other.org": 9, "cdn.net": 5 });
   assert.deepEqual(seen, { "a.com": { "keep.other.org": 1, "cdn.net": 8 } });
 });
 
@@ -148,7 +148,7 @@ test("hosts of other groups do not block aggregation inside a group", () => {
     "www.b.com": { rootHost: "www.b.com", hosts: { "z.cdn.net": 3 } },
   };
   const { groups: next } = agg(groups);
-  assert.deepEqual(next["a.com"].hosts, { "cdn.net": 1 });
+  assert.deepEqual(next["a.com"].hosts, { "cdn.net": 2 });
   assert.equal(next["www.b.com"], groups["www.b.com"]);
 });
 
@@ -159,22 +159,22 @@ test("the same record may appear in several groups", () => {
   };
   const seen = { "a.com": { "x.cdn.net": 7 }, "www.b.com": { "p.q.cdn.net": 9, "r.cdn.net": 4 } };
   const next = agg(groups, seen);
-  assert.deepEqual(next.groups["a.com"].hosts, { "cdn.net": 1 });
-  assert.deepEqual(next.groups["www.b.com"].hosts, { "cdn.net": 3 });
+  assert.deepEqual(next.groups["a.com"].hosts, { "cdn.net": 2 });
+  assert.deepEqual(next.groups["www.b.com"].hosts, { "cdn.net": 5 });
   assert.deepEqual(next.seen, { "a.com": { "cdn.net": 7 }, "www.b.com": { "cdn.net": 9 } });
 });
 
 test("a refused domain falls back to the widest allowed level", () => {
   const hosts = { "a.x.fna.cdn.net": 1, "b.y.fna.cdn.net": 2, "s.xx.cdn.net": 3, "t.xx.cdn.net": 4, "lone.cdn.net": 5 };
   const denied = { roots: ["a.com"], deny: ["*.ads.cdn.net"], bypass: [] };
-  assert.deepEqual(agg({ "a.com": { rootHost: "www.a.com", hosts } }, {}, denied).groups["a.com"].hosts, { "fna.cdn.net": 1, "xx.cdn.net": 3, "lone.cdn.net": 5 });
+  assert.deepEqual(agg({ "a.com": { rootHost: "www.a.com", hosts } }, {}, denied).groups["a.com"].hosts, { "fna.cdn.net": 2, "xx.cdn.net": 4, "lone.cdn.net": 5 });
   const { "lone.cdn.net": lone, ...rest } = hosts;
   const bypassed = { roots: ["a.com"], deny: [], bypass: ["lone.cdn.net"] };
-  assert.deepEqual(agg({ "a.com": { rootHost: "www.a.com", hosts: rest } }, {}, bypassed).groups["a.com"].hosts, { "fna.cdn.net": 1, "xx.cdn.net": 3 });
+  assert.deepEqual(agg({ "a.com": { rootHost: "www.a.com", hosts: rest } }, {}, bypassed).groups["a.com"].hosts, { "fna.cdn.net": 2, "xx.cdn.net": 4 });
   assert.equal(lone, 5);
   const rooted = { roots: ["a.com", "xx.cdn.net"], deny: [], bypass: [] };
   const withRoot = { "a.com": { rootHost: "www.a.com", hosts: { "a.x.fna.cdn.net": 1, "b.y.fna.cdn.net": 2, "m.cdn.net": 3 } }, "xx.cdn.net": { rootHost: null, hosts: {} } };
-  assert.deepEqual(agg(withRoot, {}, rooted).groups["a.com"].hosts, { "fna.cdn.net": 1, "m.cdn.net": 3 });
+  assert.deepEqual(agg(withRoot, {}, rooted).groups["a.com"].hosts, { "fna.cdn.net": 2, "m.cdn.net": 3 });
 });
 
 test("the shared CDN groups from the customer state aggregate inside each root", () => {
@@ -182,9 +182,9 @@ test("the shared CDN groups from the customer state aggregate inside each root",
   const analysis = { roots: ["facebook.com", "instagram.com", "threads.com"], deny: ["*.google-analytics.com", "*.doubleclick.net"], bypass: ["*.ru", "*.xn--p1ai"] };
   const first = aggregateGroups(groups, {}, analysis, PSL);
   assert.deepEqual(Object.keys(first.groups["instagram.com"].hosts).sort(), ["cdninstagram.com", "fbcdn.net"]);
-  assert.equal(first.groups["instagram.com"].hosts["fbcdn.net"], 1790194698849);
-  assert.equal(first.groups["instagram.com"].hosts["cdninstagram.com"], 1790194698520);
-  assert.deepEqual(first.groups["facebook.com"].hosts, { "fbcdn.net": 1790194708272, "www.fbsbx.com": 1790194810509 });
+  assert.equal(first.groups["instagram.com"].hosts["fbcdn.net"], 1790265225519);
+  assert.equal(first.groups["instagram.com"].hosts["cdninstagram.com"], 1790265215612);
+  assert.deepEqual(first.groups["facebook.com"].hosts, { "fbcdn.net": 1790194810496, "www.fbsbx.com": 1790194810509 });
   assert.equal(first.groups["threads.com"], groups["threads.com"]);
   const second = aggregateGroups(first.groups, first.seen, analysis, PSL);
   assert.equal(second.groups, first.groups);
@@ -193,7 +193,7 @@ test("the shared CDN groups from the customer state aggregate inside each root",
 test("aggregation is deterministic, idempotent and keeps unchanged objects", () => {
   const groups = one({ "b.cdn.net": 2, "a.cdn.net": 1, "c.img.org": 3, "d.img.org": 4 });
   const first = agg(groups);
-  assert.deepEqual(first.groups["a.com"].hosts, { "cdn.net": 1, "img.org": 3 });
+  assert.deepEqual(first.groups["a.com"].hosts, { "cdn.net": 2, "img.org": 4 });
   assert.equal(first.groups["www.b.com"], groups["www.b.com"]);
   const second = agg(first.groups, first.seen);
   assert.equal(second.groups, first.groups);
@@ -210,7 +210,7 @@ test("a nested record merges into its parent and is no ground for widening", () 
   assert.deepEqual(grouped({ "c.w.a.e.com": 1, "w.a.e.com": 2 }, deny), ["w.a.e.com"]);
   assert.deepEqual(grouped({ "c.w.a.e.com": 1, "w.a.e.com": 2, "q.a.e.com": 3 }, deny), ["a.e.com"]);
   const { groups, seen } = aggregateGroups({ "root.org": { rootHost: "root.org", hosts: { "cdn.e.com": 5, "img.cdn.e.com": 2 } } }, { "root.org": { "img.cdn.e.com": 9, "cdn.e.com": 7 } }, ROOT_ORG, PSL);
-  assert.deepEqual(groups["root.org"].hosts, { "cdn.e.com": 2 });
+  assert.deepEqual(groups["root.org"].hosts, { "cdn.e.com": 5 });
   assert.deepEqual(seen["root.org"], { "cdn.e.com": 9 });
 });
 

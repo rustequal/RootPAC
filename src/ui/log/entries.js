@@ -32,6 +32,7 @@ const COMMANDS = {
   importState: "Backup imported",
   setEnabled: "Proxy switched",
   removeHost: "Host removed",
+  routeHere: "Route choice",
   clearGroup: "Group cleared",
 };
 
@@ -72,6 +73,8 @@ function commandText(entry) {
       return entry.enabled ? "Proxy switched on" : "Proxy switched off";
     case "removeHost":
       return `Host ${entry.host} removed from ${entry.root}`;
+    case "routeHere":
+      return `${(entry.hosts ?? []).join(", ")} routed through the proxy of ${entry.root}`;
     case "clearGroup":
       return `Group ${entry.root} cleared`;
     default:

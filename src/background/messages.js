@@ -3,7 +3,7 @@ import { exportBackup, readBackup } from "../core/backup.js";
 import { buildSystemPac } from "../core/build.js";
 import { rootOf } from "../core/hosts.js";
 import { adoptLegacyGroups, aggregateGroups, pruneSeen, reconcileGroups } from "../core/groups.js";
-import { answersOf, proxiesOf, sharedRoutes } from "../core/routes.js";
+import { answersOf, proxiesOf, routeThrough, sharedRoutes } from "../core/routes.js";
 import { trialAnswers, trialErrors, trialPlan } from "../core/trial.js";
 import { NO_LOG } from "./log.js";
 
@@ -22,7 +22,7 @@ function requireValidUserPac(state) {
 }
 
 
-export function createCommands({ store, engine, checker, learner, log = NO_LOG }) {
+export function createCommands({ store, engine, checker, learner, log = NO_LOG, now = Date.now }) {
   const normalize = (groups, seen, analysis) => {
     const adopted = adoptLegacyGroups(groups, seen, analysis.roots);
     const reconciled = reconcileGroups(adopted.groups, analysis);
@@ -69,6 +69,24 @@ export function createCommands({ store, engine, checker, learner, log = NO_LOG }
       delete hosts[host];
       const groups = { ...state.groups, [mask]: { rootHost: group.rootHost, hosts } };
       return { ok: true, control: await engine.commit(rebuild(state, groups, pruneSeen(state.seen, groups))) };
+    });
+  };
+
+  // Route here: the root's proxy carries these records it shares with roots on other proxies; every root keeps them.
+  const routeHere = async ({ mask, hosts }) => {
+    if (!Array.isArray(hosts) || hosts.length === 0) throw new TypeError("hosts must be a non-empty array");
+    for (const host of hosts) requireString(host, "host");
+    return store.run(async (state) => {
+      requireValidUserPac(state);
+      const group = requireGroup(state, mask);
+      const time = now();
+      let groups = state.groups;
+      for (const host of hosts) {
+        if (!Object.hasOwn(group.hosts, host)) throw new Error(`Host ${JSON.stringify(host)} is not in group ${JSON.stringify(mask)}`);
+        groups = routeThrough(groups, mask, host, time);
+      }
+      if (groups === state.groups) return { ok: true, control: null };
+      return { ok: true, control: await engine.commit(rebuild(state, groups, state.seen)) };
     });
   };
 
@@ -123,7 +141,7 @@ export function createCommands({ store, engine, checker, learner, log = NO_LOG }
 
   const getRoutes = async () => ({ ok: true, roots: sharedRoutes(store.state, store.psl) });
 
-  const handlers = { saveUserPac, setEnabled, removeHost, clearGroup, getTabState, getRoutes, exportState, importState, cancelCheck };
+  const handlers = { saveUserPac, setEnabled, removeHost, routeHere, clearGroup, getTabState, getRoutes, exportState, importState, cancelCheck };
 
   // What a command changed, for the diagnostic log; read-only commands are not logged.
   const userPac = (message, response) => (response.ok ? { roots: response.analysis.roots.length } : { problems: response.errors?.length ?? 0, error: response.error });
@@ -132,6 +150,7 @@ export function createCommands({ store, engine, checker, learner, log = NO_LOG }
     importState: userPac,
     setEnabled: ({ enabled }, response) => ({ enabled, error: response.error }),
     removeHost: ({ mask, host }, response) => ({ root: mask, host, error: response.error }),
+    routeHere: ({ mask, hosts }, response) => ({ root: mask, hosts, error: response.error }),
     clearGroup: ({ mask }, response) => ({ root: mask, error: response.error }),
   };
 

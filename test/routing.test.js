@@ -217,7 +217,7 @@ test("a name learned in several groups routes by the first group in mask order",
   assert.equal(route(pac, "z.only.b.cdn.net"), "PROXY b:1");
 });
 
-test("a name learned in several groups routes by the group that learned it first", () => {
+test("a name learned in several groups routes by the group that learned it last", () => {
   const userPac = [
     "function FindProxyForURL(url, host) {",
     '  if (root(host, "a.com")) return "PROXY a:1";',
@@ -226,8 +226,8 @@ test("a name learned in several groups routes by the group that learned it first
     "}",
   ].join("\n");
   const system = buildSystemPac(userPac, {
-    "a.com": { rootHost: "www.a.com", hosts: { "cdn.net": 9 } },
-    "b.com": { rootHost: "www.b.com", hosts: { "cdn.net": 3 } },
+    "a.com": { rootHost: "www.a.com", hosts: { "cdn.net": 3 } },
+    "b.com": { rootHost: "www.b.com", hosts: { "cdn.net": 9 } },
   }, PSL);
   assert.equal(route(loadPac(system), "x.cdn.net"), "PROXY b:1");
   assert.equal(system.match(/"cdn\.net"/g).length, 1);

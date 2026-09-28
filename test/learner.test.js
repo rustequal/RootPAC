@@ -266,12 +266,12 @@ test("hosts sharing a registrable domain are aggregated and covered subdomains a
   assert.deepEqual(learned(area).hosts, { "rr1---sn-a.googlevideo.com": 1000 });
   request(learner, "https://rr2---sn-b.googlevideo.com/v");
   await settled(learner);
-  assert.deepEqual(learned(area).hosts, { "googlevideo.com": 1000 });
+  assert.deepEqual(learned(area).hosts, { "googlevideo.com": 1001 });
   assert.deepEqual(browser.sessionRules.get(RULE_IDS.hosts).condition.requestDomains, ["googlevideo.com"]);
   browser.journal.clear();
   request(learner, "https://rr3---sn-c.googlevideo.com/v");
   await settled(learner);
-  assert.deepEqual(learned(area).hosts, { "googlevideo.com": 1000 });
+  assert.deepEqual(learned(area).hosts, { "googlevideo.com": 1001 });
   assert.deepEqual(browser.journal.entries, []);
   assert.deepEqual(area.items["seen:instagram.com"], { "googlevideo.com": 1002 });
   assert.deepEqual((await session.get("seenThisSession")).seenThisSession, ["instagram.com googlevideo.com"]);

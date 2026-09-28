@@ -221,7 +221,7 @@ test("load aggregates already learned hosts and rebuilds a smaller System PAC", 
   const area = new FakeArea(stored({ "group:a.com": { rootHost: "www.a.com", hosts }, "seen:a.com": { "rr1---sn-a.googlevideo.com": 9, "cdn.a.net": 5 } }));
   const before = buildSystemPac(USER_PAC, { "a.com": { rootHost: "www.a.com", hosts } }, PSL);
   const state = await new Store(area, new FakeArea()).load(PSL);
-  assert.deepEqual(state.groups["a.com"].hosts, { "cdn.a.net": 1, "googlevideo.com": 2 });
+  assert.deepEqual(state.groups["a.com"].hosts, { "cdn.a.net": 1, "googlevideo.com": 4 });
   assert.deepEqual(state.seen, { "a.com": { "cdn.a.net": 5, "googlevideo.com": 9 } });
   assert.equal(area.items.appliedPac, buildSystemPac(USER_PAC, state.groups, PSL));
   assert.ok(area.items.appliedPac.length < before.length);
