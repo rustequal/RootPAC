@@ -223,12 +223,14 @@ test("the viewer gets each root's proxy, the owner of its site and the hosts it 
         proxy: "PROXY fb:1",
         root: { site: "facebook.com", owner: "facebook.com", verdict: "same", ownerProxy: "PROXY fb:1" },
         records: { "fbcdn.net": { site: "fbcdn.net", owner: "instagram.com", verdict: "conflict", ownerProxy: "PROXY ig:1" } },
+        taken: {},
         blocks: {},
       },
       "instagram.com": {
         proxy: "PROXY ig:1",
         root: { site: "instagram.com", owner: "instagram.com", verdict: "same", ownerProxy: "PROXY ig:1" },
         records: { "fbcdn.net": { site: "fbcdn.net", owner: "instagram.com", verdict: "same", ownerProxy: "PROXY ig:1" } },
+        taken: {},
         blocks: { "fbcdn.net": ["facebook.com"] },
       },
     },
@@ -301,6 +303,13 @@ test("a root page closed by Route here shows the conflict in its tab, though the
   visit(learner, "https://www.facebook.com/");
   await idle(learner, resolver);
   assert.equal((await commands.dispatch({ type: "routeHere", mask: "instagram.com", hosts: ["facebook.com"] })).ok, true);
+  // The owner lists the handed root's domain as a site of its own, blocked for that root; the popup counts it.
+  const { roots } = await commands.dispatch({ type: "getRoutes" });
+  assert.deepEqual(roots["instagram.com"].taken, { "facebook.com": { site: "facebook.com", owner: "instagram.com", verdict: "same", ownerProxy: "PROXY ig:1" } });
+  assert.deepEqual(roots["instagram.com"].blocks, { "facebook.com": ["facebook.com"] });
+  assert.deepEqual(roots["facebook.com"].taken, {});
+  visit(learner, "https://www.instagram.com/", TAB + 2);
+  assert.equal((await commands.dispatch({ type: "getTabState", tabId: TAB + 2 })).hostCount, 2);
   const tabId = TAB + 1;
   const details = { requestId: "closed", type: "main_frame", tabId, url: "https://www.facebook.com/", documentLifecycle: "active", timeStamp: 1 };
   learner.onRequest(details);

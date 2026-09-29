@@ -371,14 +371,6 @@ table.hosts tr.site td.host {
   font-weight: 600;
 }
 
-table.hosts td.host .tag {
-  font-family: system-ui, "Segoe UI", sans-serif;
-  font-weight: 400;
-  font-size: 12px;
-  color: var(--muted);
-  word-break: normal;
-}
-
 table.hosts tr.sub td {
   border-top: none;
   padding-top: 2px;

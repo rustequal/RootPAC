@@ -3,7 +3,7 @@ import { exportBackup, readBackup } from "../core/backup.js";
 import { buildSystemPac } from "../core/build.js";
 import { rootOf } from "../core/hosts.js";
 import { adoptLegacyGroups, aggregateGroups, pruneSeen, reconcileGroups } from "../core/groups.js";
-import { answersOf, bootstrapSites, normalizeSites, proxiesOf, releaseSites, routeSites, sharedRoutes, siteOf } from "../core/routes.js";
+import { answersOf, bootstrapSites, normalizeSites, proxiesOf, releaseSites, routeSites, sharedRoutes, siteOf, sitesOfState } from "../core/routes.js";
 import { trialAnswers, trialErrors, trialPlan } from "../core/trial.js";
 import { NO_LOG } from "./log.js";
 
@@ -147,6 +147,7 @@ export function createCommands({ store, engine, checker, learner, log = NO_LOG, 
   const getTabState = async ({ tabId }) => {
     if (!Number.isSafeInteger(tabId)) throw new TypeError("tabId must be an integer");
     const { analysis, groups } = store.state;
+    const sites = analysis === null ? {} : sitesOfState(store.state, analysis.roots, store.psl);
     const host = learner.tabHost(tabId);
     const mask = analysis === null || host === null ? null : rootOf(host, analysis.roots);
     const group = mask === null ? null : groups[mask];
@@ -155,8 +156,9 @@ export function createCommands({ store, engine, checker, learner, log = NO_LOG, 
       ok: true,
       mask,
       rootHost: group?.rootHost ?? null,
-      // The root itself and its learned hosts: what the System PAC viewer lists for the group.
-      hostCount: group === null ? 0 : Object.keys(group.hosts).length + 1,
+      // The root itself, its learned hosts and the domains of roots that handed their site to it: what the System PAC
+      // viewer lists for the group.
+      hostCount: group === null ? 0 : Object.keys(group.hosts).length + 1 + analysis.roots.filter((root) => root !== mask && Object.hasOwn(groups, root) && sites[siteOf(root, store.psl)] === mask).length,
       loaded: learner.loaded(tabId),
       proxied: learner.proxied(tabId),
       newHosts: learner.newHosts(tabId),

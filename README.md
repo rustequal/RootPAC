@@ -115,6 +115,7 @@ Newest first. The TZ describes only the current version; this section is the rec
 
 | Version | Changes |
 | --- | --- |
+| 1.0.28 | System PAC viewer: no `root site` label, a root's domain is a site of its group like any learned one. A root whose site another root routes is listed in that root's group too, with `own proxy` and the roots it is blocked for (`getRoutes` gives `taken`), and counts in its sites and hosts and in the popup's known hosts. |
 | 1.0.27 | System PAC viewer: button text never wraps, and the action column centres **Remove site** and **Remove** on one axis. |
 | 1.0.26 | System PAC viewer: the button that removes a whole site reads **Remove site**, the one for a single host stays **Remove**; only **Clear group** asks for confirmation. |
 | 1.0.25 | A root whose own site another root on a different proxy routes: its closed page, which never commits, now makes its tab a root tab with the proxy conflict — amber icon with `!`, the conflict and **Route here** in the popup — instead of a grey icon with nothing in the popup. The System PAC viewer's group line keeps only the root's proxy, the site and host counts and `N blocked`: the root host and `site routed by` are gone, the table shows them. |

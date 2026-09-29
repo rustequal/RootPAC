@@ -229,14 +229,15 @@ export function routedGroups(groups, sites, roots, psl) {
   return { routed, pacRoots };
 }
 
-// For the viewer: each root's proxy, the site, owner and verdict of its own domain and of every host it holds, and for
-// the sites it owns, the roots a proxy conflict blocks.
+// For the viewer: each root's proxy, the site, owner and verdict of its own domain and of every host it holds, the
+// domains of roots that handed their site to it, and for the sites it owns, the roots a proxy conflict blocks. A root's
+// domain is never learned, but it is a site of the root that routes it like any learned one.
 export function sharedRoutes(state, psl) {
   const answers = answersOf(state);
   const { groups } = state;
   const sites = sitesOfState(state, Object.keys(groups), psl);
   const roots = Object.fromEntries(
-    Object.keys(groups).map((mask) => [mask, { proxy: answers[mask] ?? null, root: null, records: {}, blocks: {} }]),
+    Object.keys(groups).map((mask) => [mask, { proxy: answers[mask] ?? null, root: null, records: {}, taken: {}, blocks: {} }]),
   );
   const routeOf = (mask, name) => {
     const owner = ownerOf(sites, name, psl);
@@ -254,6 +255,12 @@ export function sharedRoutes(state, psl) {
       roots[mask].records[host] = route;
       if (route.verdict === CONFLICT) block(route.owner, route.site, mask);
     }
+  }
+  for (const mask of Object.keys(groups)) {
+    const { owner, site, verdict: rootVerdict } = roots[mask].root;
+    if (owner === null || owner === mask || !Object.hasOwn(roots, owner)) continue;
+    roots[owner].taken[mask] = routeOf(owner, mask);
+    if (rootVerdict === CONFLICT) block(owner, site, mask);
   }
   for (const root of Object.values(roots)) for (const masks of Object.values(root.blocks)) masks.sort();
   return roots;
