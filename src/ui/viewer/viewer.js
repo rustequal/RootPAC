@@ -164,7 +164,9 @@ function renderGroups() {
         showMessage(error.message);
       }
     });
-    summary.append(clear);
+    const actions = element("span", "actions");
+    actions.append(clear);
+    summary.append(actions);
     box.append(summary);
     box.addEventListener("toggle", () => {
       if (needle === "") {
