@@ -67,7 +67,10 @@ Requires Node.js 22 or later. No dependencies.
 Rules:
 
 - **Push only to `main`.** Do not create new branches: every change is committed and pushed straight to `main`.
-- **Always deliver a ZIP archive.** Every change ends with a ZIP of the extension (`rootpac-<version>.zip` with a single `rootpac/` folder inside), ready for **Load unpacked**. It is built from the committed tree: `git archive --format=zip --prefix=rootpac/ -o rootpac-<version>.zip HEAD`.
+- **Always deliver a ZIP archive.** Every change ends with a ZIP of the extension (`rootpac-<version>.zip` with a single `rootpac/` folder inside), ready for **Load unpacked**. It is built from the committed tree, then the specification is added: `git archive --format=zip --prefix=rootpac/ -o rootpac-<version>.zip HEAD`, copy `RootPAC-TZ.md` into `rootpac/`, `zip rootpac-<version>.zip rootpac/RootPAC-TZ.md`.
+- **The specification lives only in the ZIP.** `rootpac/RootPAC-TZ.md` (the TZ, in Russian) describes the current version completely, so the code can be understood without reading it. Never remove it from the ZIP and never push it to GitHub: take it from the previous ZIP and carry it into the next one.
+- **Keep the TZ current, not a log.** Every change of behaviour updates the TZ in place: the affected sections are rewritten to describe the new version as a whole, briefly and exactly. No change lists, version history, audits or "added in" notes go into the TZ.
+- **History goes into this README.** Versions, audits, what was fixed and what was added are recorded in [History](#history) below.
 
 ```sh
 npm test
@@ -105,6 +108,31 @@ docs/USER-GUIDE.md   user guide
 - A `bypass` host sees your real IP, even when a root page requests it. This is a deliberate trade-off.
 - A host needed by roots on different proxies can go through only one of them: the PAC sees the host, not the tab. It works for the root that learned it last and is blocked for the others (a proxy conflict); **Route here**, in the popup or the System PAC viewer, hands it to another root, and every root keeps it learned. Which proxy a root uses is taken from a trial run of the User PAC in a sandbox, where `dnsResolve` answers nothing and `myIpAddress` is `127.0.0.1`; a User PAC that routes by those gets a different answer there than in the browser.
 - There is no off switch in the interface: one click would remove both the proxy and the blocking. Disable the extension in `chrome://extensions`.
+
+## History
+
+Newest first. The TZ describes only the current version; this section is the record of how it got there.
+
+| Version | Changes |
+| --- | --- |
+| 1.0.21 | **Route here** chooses the root a shared host goes through: the host's time in that root becomes now, so it routes the host; the other roots keep it learned and get the conflict. Route here in the popup (every blocked host of the page, then a reload) and in the viewer's route cell. A widened record keeps the latest time of the records it takes in. The System PAC copies only the groups that hold a record another group routes. |
+| 1.0.20 | A request belongs to the root of its tab's page, frames of other roots included; only outside root pages does a root's frame or worker count as that root. The top frame's requests take their page from their initiator. A host held by several roots is routed by one of them, and only that root carries it into the System PAC; removing it there hands the route on. |
+| 1.0.19 | Popup: one conflict message per page, listed by the owning root; one Reload; the popup shrinks its messages instead of scrolling. Viewer: each root's proxy, a route column, blocked records of other roots; `getRoutes`. |
+| 1.0.18 | Every root learns the hosts it needs itself. DNR allow rules per root and per scope (pages, own frames and workers), each root with its own id range. The proxy of each root comes from a trial run on its rootHost (on save and in the background). Proxy conflicts are blocked, shown (amber icon with `!`, popup) and logged. The fuzzer checks that no root reaches a host through another root's proxy. |
+| 1.0.17 | `brand-128.png` with Chrome Web Store margins. |
+| 1.0.16 | Pages filter in the log; no time zone banner. |
+| 1.0.15 | Times in Chrome's own format; root pages are logged at commit. |
+| 1.0.14 | Diagnostic log: Options switch, IndexedDB (last 5000), log page with proxy failures by host, export. |
+| 1.0.13 | Reload in the popup after a proxy failure. |
+| 1.0.12 | A proxy error belongs to the page load it happened in (per tab, cleared by the next navigation) instead of a session-wide `lastProxyError`. Options without the Incognito banner; Revert restores the saved result too. |
+| 1.0.11 | Audit 4 (performance, below). First commit of this repository; documentation in English, MIT license; one-off audit tools removed afterwards. |
+
+Audits before 1.0.11 (the fixes are part of the current TZ):
+
+- **Audit 1** (after 1.0.0): fixes И1–И6.
+- **Audit 2** (2026-09-24, after 1.0.1; И7–И15): roots fully blocked while protection is off, including embeds on other pages (rule 8); an untouchable System PAC router (User PAC cannot override it); Incognito proxy control; honest tab counters and the "loaded before protection was ready" mark; rule reconciliation ignoring DNR defaults; aggregation within a group only; learning of reporting endpoints (`Report-To`, `Reporting-Endpoints`); one session record per tab.
+- **Audit 3** (2026-09-25, after 1.0.9; И16–И22, release 1.0.10): canonical groups and linear aggregation; a root beats a learned record in the router; `localhost` names are never learned; an exact record for a bare public suffix; bypass regex alphabet and trailing dot; `deny` may not cover a root; one host/mask grammar (`core/names.js`) and a 253-character suffix search; the group fuzzer.
+- **Audit 4** (2026-09-25, performance; И23–И27, release 1.0.11): icon and badge written only on change, shared default value; an indexed one-pass router with memoized User PAC answers; no rebuild on service worker start (`stateVerified`); one session key per tab.
 
 ## License
 
