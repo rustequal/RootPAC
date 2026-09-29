@@ -23,6 +23,10 @@ const pslAutoStatus = document.getElementById("pslAutoStatus");
 
 let saved = "";
 let checking = false;
+let cancelled = false;
+// A Save the checks refused: a banner of this page only (the saved User PAC is unchanged), until a Save that passes,
+// Revert or an import.
+let refused = null;
 
 const dirty = () => text.value !== saved;
 
@@ -42,11 +46,23 @@ function setBackupStatus(message, className = "muted") {
   backupStatus.className = className;
 }
 
+// Puts the cursor on an error. The editor grows with the text, so the page scrolls, not the field (which centres the line
+// only when it has a scroll of its own). The page moves only when the line is off the screen, and then puts it a third
+// of the way down: the browser's own scroll to the cursor left it at the bottom edge, with the result panel in view.
 function focusPosition(line, column) {
   const lines = text.value.split("\n");
-  const offset = lines.slice(0, line - 1).reduce((total, item) => total + item.length + 1, 0) + column - 1;
-  text.focus();
+  const index = Math.max(0, Math.min(line, lines.length) - 1);
+  const offset = lines.slice(0, index).reduce((total, item) => total + item.length + 1, 0) + Math.min(Math.max(column - 1, 0), lines[index].length);
+  const pageTop = window.scrollY;
+  text.focus({ preventScroll: true });
   text.setSelectionRange(offset, offset);
+  window.scrollTo({ top: pageTop });
+  const style = getComputedStyle(text);
+  const height = parseFloat(style.lineHeight);
+  const top = parseFloat(style.paddingTop) + index * height;
+  text.scrollTop = Math.max(0, top + height / 2 - text.clientHeight / 2);
+  const onScreen = text.getBoundingClientRect().top + top - text.scrollTop;
+  if (onScreen < 0 || onScreen + height > window.innerHeight) window.scrollBy({ top: onScreen - window.innerHeight / 3 });
 }
 
 // Errors of the User PAC: a click on one puts the cursor there.
@@ -60,8 +76,10 @@ function errorList(errors) {
   return list;
 }
 
+const problems = (count) => `${count} problem${count === 1 ? "" : "s"}`;
+
 function showErrors(errors) {
-  result.replaceChildren(element("p", "error", `${errors.length} problem${errors.length === 1 ? "" : "s"}`), errorList(errors));
+  result.replaceChildren(element("p", "error", problems(errors.length)), errorList(errors));
 }
 
 function analysisList({ roots, deny, bypass }) {
@@ -85,6 +103,7 @@ const RESULT_KEYS = ["analysis", "userPacErrors", "pslConflict"];
 async function load(force) {
   const stored = await readLocal(["userPac", ...RESULT_KEYS]);
   const value = stored.userPac ?? "";
+  if (force) setRefused(null);
   if (force || !dirty()) {
     saved = value;
     text.value = value;
@@ -97,9 +116,28 @@ async function load(force) {
   showResult(stored);
 }
 
+function setRefused(notice) {
+  refused = notice;
+  loadBanners();
+}
+
+// A refused Save gets a banner above the editor: Ctrl+S saves from anywhere, and the result panel may be off the screen.
+// A check the user cancelled is not a refusal.
+function refuse(errors, message) {
+  if (cancelled) {
+    setStatus("");
+    setRefused(null);
+    return;
+  }
+  setStatus("Not saved", "error");
+  const what = errors === undefined ? `Not saved: ${message}` : `Not saved — ${problems(errors.length)}`;
+  setRefused({ id: "refused", level: "error", text: `${what}. The saved User PAC stays applied`, action: "errors", errors: errors ?? [] });
+}
+
 async function save() {
   if (checking) return;
   checking = true;
+  cancelled = false;
   cancel.hidden = false;
   setStatus("Checking…");
   result.replaceChildren();
@@ -109,17 +147,18 @@ async function save() {
     if (response.ok) {
       saved = value;
       setStatus("Saved", "ok");
+      setRefused(null);
       showResult(await readLocal(RESULT_KEYS));
     } else if (response.errors !== undefined) {
-      setStatus("");
       showErrors(response.errors);
+      refuse(response.errors);
     } else {
-      setStatus("");
       result.replaceChildren(element("p", "error", response.error));
+      refuse(undefined, response.error);
     }
   } catch (error) {
-    setStatus("");
     result.replaceChildren(element("p", "error", error.message));
+    refuse(undefined, error.message);
   } finally {
     checking = false;
     cancel.hidden = true;
@@ -127,7 +166,10 @@ async function save() {
 }
 
 document.getElementById("save").addEventListener("click", save);
-cancel.addEventListener("click", () => send({ type: "cancelCheck" }).catch((error) => setStatus(error.message)));
+cancel.addEventListener("click", () => {
+  cancelled = true;
+  send({ type: "cancelCheck" }).catch((error) => setStatus(error.message));
+});
 
 document.getElementById("revert").addEventListener("click", () => load(true));
 
@@ -302,7 +344,7 @@ function noticeNode(notice) {
 async function loadBanners() {
   const [local, session] = await Promise.all([readLocal(NOTICE_KEYS.local), readSession(NOTICE_KEYS.session)]);
   const built = element("div");
-  built.append(...notices(local, session, { page: "options" }).map(noticeNode));
+  built.append(...[...(refused === null ? [] : [refused]), ...notices(local, session, { page: "options" })].map(noticeNode));
   if (built.innerHTML !== banners.innerHTML) banners.replaceChildren(...built.childNodes);
 }
 
