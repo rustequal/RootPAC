@@ -1,6 +1,6 @@
 import { analyzeUserPac } from "../core/analyze.js";
 import { buildSystemPac } from "../core/build.js";
-import { adoptLegacyGroups, aggregateGroups, pruneSeen, reconcileGroups, reconcileUses } from "../core/groups.js";
+import { adoptLegacyGroups, aggregateGroups, pruneSeen, reconcileGroups } from "../core/groups.js";
 import { bootstrapSites, normalizeSites, releaseSites } from "../core/routes.js";
 import { LOG_SETTING } from "./log.js";
 
@@ -8,20 +8,21 @@ export const SCHEMA_VERSION = 1;
 
 const GROUP = "group:";
 const SEEN = "seen:";
-const USES = "uses:";
 const VERIFIED = "stateVerified";
 const SCALARS = ["enabled", "userPac", "analysis", "appliedPac", "userPacErrors", "proxies", "sites"];
 // Settings of the pages that are not part of the routing state; the store leaves them alone.
 const SETTINGS = new Set([LOG_SETTING]);
+// uses:<mask> of 1.0.34 recorded the root hosts a root's pages requested, which are learned records now; loading drops
+// these keys.
+const retired = (key) => key.startsWith("uses:");
 
 function decode(items) {
-  const state = { enabled: true, userPac: null, analysis: null, appliedPac: null, userPacErrors: null, proxies: null, sites: null, groups: {}, seen: {}, uses: {} };
+  const state = { enabled: true, userPac: null, analysis: null, appliedPac: null, userPacErrors: null, proxies: null, sites: null, groups: {}, seen: {} };
   for (const [key, value] of Object.entries(items)) {
-    if (key === "schemaVersion" || SETTINGS.has(key)) continue;
+    if (key === "schemaVersion" || SETTINGS.has(key) || retired(key)) continue;
     if (SCALARS.includes(key)) state[key] = value;
     else if (key.startsWith(GROUP)) state.groups[key.slice(GROUP.length)] = value;
     else if (key.startsWith(SEEN)) state.seen[key.slice(SEEN.length)] = value;
-    else if (key.startsWith(USES)) state.uses[key.slice(USES.length)] = value;
     else throw new Error(`Unknown storage key ${JSON.stringify(key)}`);
   }
   if (typeof state.enabled !== "boolean") throw new Error("Stored enabled flag is not a boolean");
@@ -43,11 +44,6 @@ function decode(items) {
   }
   for (const [mask, seen] of Object.entries(state.seen)) {
     if (!isRecord(seen) || !Object.values(seen).every(isTime)) throw new Error(`Stored seen records of ${JSON.stringify(mask)} are malformed`);
-  }
-  for (const [mask, uses] of Object.entries(state.uses)) {
-    if (!isRecord(uses) || !Object.values(uses).every((times) => Array.isArray(times) && times.length === 2 && times.every(isTime))) {
-      throw new Error(`Stored root hosts of ${JSON.stringify(mask)} are malformed`);
-    }
   }
   if (state.analysis !== null && !Object.hasOwn(state.analysis, "bypass")) state.analysis = { ...state.analysis, bypass: [] };
   return state;
@@ -73,7 +69,7 @@ function isAnalysis(analysis) {
 
 
 function refresh(state, psl) {
-  if (state.userPac === null) return { ...state, groups: {}, seen: {}, uses: {}, sites: null };
+  if (state.userPac === null) return { ...state, groups: {}, seen: {}, sites: null };
   const result = analyzeUserPac(state.userPac, psl);
   if (!result.ok) {
     const same = JSON.stringify(result.errors) === JSON.stringify(state.userPacErrors);
@@ -85,10 +81,10 @@ function refresh(state, psl) {
   const adopted = adoptLegacyGroups(state.groups, state.seen, analysis.roots);
   // The owner of each site (core/routes.js); a state from a version without owners gets the routes it had.
   const owners = state.sites ?? bootstrapSites(adopted.groups, analysis.roots, psl);
-  const reconciled = releaseSites(reconcileGroups(adopted.groups, analysis), owners, analysis.roots, psl);
+  const reconciled = reconcileGroups(adopted.groups, analysis);
   const { groups, seen } = aggregateGroups(reconciled, pruneSeen(adopted.seen, reconciled), analysis, psl);
-  const sites = normalizeSites(owners, groups, analysis.roots, psl, state.analysis?.roots ?? analysis.roots);
-  return { ...state, analysis, groups, seen, uses: reconcileUses(state.uses, analysis.roots), sites, appliedPac: buildSystemPac(state.userPac, groups, psl, sites), userPacErrors: null };
+  const sites = normalizeSites(releaseSites(owners, groups, analysis.roots, psl), groups, analysis.roots, psl, state.analysis?.roots ?? analysis.roots);
+  return { ...state, analysis, groups, seen, sites, appliedPac: buildSystemPac(state.userPac, groups, psl, sites), userPacErrors: null };
 }
 
 function diffRecords(prefix, prev, next, set, remove) {
@@ -110,7 +106,6 @@ export function diffState(prev, next) {
   }
   diffRecords(GROUP, prev.groups, next.groups, set, remove);
   diffRecords(SEEN, prev.seen, next.seen, set, remove);
-  diffRecords(USES, prev.uses ?? {}, next.uses ?? {}, set, remove);
   return { set, remove };
 }
 
@@ -155,7 +150,8 @@ export class Store {
       throw new Error(`Unsupported storage schema version ${JSON.stringify(items.schemaVersion)}`);
     }
     this.#state = decode(items);
-    if (!this.#verified) await this.commit(refresh(this.#state, psl));
+    this.#stale = Object.keys(items).filter(retired);
+    if (!this.#verified || this.#stale.length > 0) await this.commit(refresh(this.#state, psl));
     return this.#state;
   }
 

@@ -64,6 +64,6 @@ test("a host of 200 000 dots is normalized and looked up in linear time", () => 
   assert.equal(ownerHost(host, index), "b.com");
   assert.equal(learnedOwner(host, index, PSL), "b.com");
   assert.equal(coveringParent(host, index, PSL), "b.com");
-  assert.equal(isLearnable(host, { roots: ["root.org"], deny: [], bypass: ["*.byp"] }, new Map(), PSL), false);
+  assert.equal(isLearnable(host, { roots: ["root.org"], deny: [], bypass: ["*.byp"] }, new Map(), PSL, "root.org"), false);
   assert.ok(performance.now() - started < 500);
 });

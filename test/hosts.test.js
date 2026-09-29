@@ -63,24 +63,28 @@ test("ownerHost finds the host itself or its closest learned parent", () => {
 test("isLearnable applies every filter", () => {
   const analysis = { roots: ["instagram.com"], deny: ["*.google-analytics.com", "graph.facebook.com"], bypass: [] };
   const index = new Map([["static.cdninstagram.com", "instagram.com"]]);
-  assert.equal(isLearnable("scontent-ams2-1.cdninstagram.com", analysis, index, PSL), true);
-  assert.equal(isLearnable("edge-chat.facebook.com", analysis, index, PSL), true);
-  assert.equal(isLearnable("www.instagram.com", analysis, index, PSL), false);
-  assert.equal(isLearnable("instagram.com", analysis, index, PSL), false);
-  assert.equal(isLearnable("www.google-analytics.com", analysis, index, PSL), false);
-  assert.equal(isLearnable("graph.facebook.com", analysis, index, PSL), false);
-  assert.equal(isLearnable("static.cdninstagram.com", analysis, index, PSL), false);
-  assert.equal(isLearnable("v1.static.cdninstagram.com", analysis, index, PSL), false);
-  assert.equal(isLearnable("157.240.1.35", analysis, index, PSL), false);
-  assert.equal(isLearnable("[2a03:2880::1]", analysis, index, PSL), false);
-  assert.equal(isLearnable("localhost", analysis, index, PSL), false);
-  assert.equal(isLearnable("scontent-ams2-1.cdninstagram.com", { roots: [], deny: [], bypass: [] }, new Map(), PSL), true);
+  assert.equal(isLearnable("scontent-ams2-1.cdninstagram.com", analysis, index, PSL, "instagram.com"), true);
+  assert.equal(isLearnable("edge-chat.facebook.com", analysis, index, PSL, "instagram.com"), true);
+  assert.equal(isLearnable("www.instagram.com", analysis, index, PSL, "instagram.com"), false);
+  assert.equal(isLearnable("instagram.com", analysis, index, PSL, "instagram.com"), false);
+  assert.equal(isLearnable("www.google-analytics.com", analysis, index, PSL, "instagram.com"), false);
+  assert.equal(isLearnable("graph.facebook.com", analysis, index, PSL, "instagram.com"), false);
+  assert.equal(isLearnable("static.cdninstagram.com", analysis, index, PSL, "instagram.com"), false);
+  assert.equal(isLearnable("v1.static.cdninstagram.com", analysis, index, PSL, "instagram.com"), false);
+  assert.equal(isLearnable("157.240.1.35", analysis, index, PSL, "instagram.com"), false);
+  assert.equal(isLearnable("[2a03:2880::1]", analysis, index, PSL, "instagram.com"), false);
+  assert.equal(isLearnable("localhost", analysis, index, PSL, "instagram.com"), false);
+  assert.equal(isLearnable("scontent-ams2-1.cdninstagram.com", { roots: [], deny: [], bypass: [] }, new Map(), PSL, "instagram.com"), true);
+  // Another root's domain is learned like any other site; a root's own never.
+  const two = { ...analysis, roots: ["instagram.com", "facebook.com"] };
+  assert.equal(isLearnable("edge-chat.facebook.com", two, index, PSL, "instagram.com"), true);
+  assert.equal(isLearnable("edge-chat.facebook.com", two, index, PSL, "facebook.com"), false);
 });
 
 test("deny covers its whole domain, as DNR requestDomains does", () => {
   const analysis = { roots: ["a.com"], deny: ["*.tracker.com", "x.com"], bypass: [] };
-  for (const host of ["tracker.com", "px.tracker.com", "x.com", "cdn.x.com"]) assert.equal(isLearnable(host, analysis, new Map(), PSL), false, host);
-  for (const host of ["nottracker.com", "tracker.com.net", "xx.com"]) assert.equal(isLearnable(host, analysis, new Map(), PSL), true, host);
+  for (const host of ["tracker.com", "px.tracker.com", "x.com", "cdn.x.com"]) assert.equal(isLearnable(host, analysis, new Map(), PSL, "a.com"), false, host);
+  for (const host of ["nottracker.com", "tracker.com.net", "xx.com"]) assert.equal(isLearnable(host, analysis, new Map(), PSL, "a.com"), true, host);
 });
 
 test("hostFromUrl drops every trailing dot", async () => {
@@ -108,8 +112,8 @@ test("an exact public suffix record covers only itself, and localhost names are 
   assert.equal(learnedOwner("github.io", index, PSL), "github.io");
   assert.equal(learnedOwner("a.github.io", index, PSL), null);
   assert.equal(learnedOwner("x.s3.amazonaws.com", index, PSL), "amazonaws.com");
-  assert.equal(isLearnable("someone.github.io", analysis, index, PSL), true);
-  assert.equal(isLearnable("co.uk", analysis, new Map(), PSL), true);
-  for (const host of ["x.localhost", "a.b.localhost"]) assert.equal(isLearnable(host, analysis, new Map(), PSL), false, host);
-  assert.equal(isLearnable("localhost.com", analysis, new Map(), PSL), true);
+  assert.equal(isLearnable("someone.github.io", analysis, index, PSL, "root.org"), true);
+  assert.equal(isLearnable("co.uk", analysis, new Map(), PSL, "root.org"), true);
+  for (const host of ["x.localhost", "a.b.localhost"]) assert.equal(isLearnable(host, analysis, new Map(), PSL, "root.org"), false, host);
+  assert.equal(isLearnable("localhost.com", analysis, new Map(), PSL, "root.org"), true);
 });

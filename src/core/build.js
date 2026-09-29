@@ -319,8 +319,7 @@ function checkGroups(groups, { roots, deny, bypass }) {
       const name = JSON.stringify(host);
       if (rootHost === null) throw new Error(`Group ${label} has hosts but no rootHost`);
       if (!isLearnableName(host)) throw new Error(`Host ${name} cannot be learned`);
-      const rootMask = rootOf(host, roots);
-      if (rootMask !== null) throw new Error(`Host ${name} matches root ${JSON.stringify(rootMask)}`);
+      if (rootOf(host, roots) === mask) throw new Error(`Host ${name} matches its own root ${JSON.stringify(mask)}`);
       const denyMask = deny.find((mask) => covers(maskDomain(mask), host));
       if (denyMask !== undefined) throw new Error(`Host ${name} is under deny ${JSON.stringify(denyMask)}`);
       const bypassMask = firstMatch(host, bypass);

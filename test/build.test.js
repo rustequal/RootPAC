@@ -134,7 +134,9 @@ test("invariant violations fail fast", () => {
   assert.throws(() => build(two, { "a.com": group(null, {}) }), /Root "c\.com" has no group/);
   assert.throws(() => build(one, { "a.com": group("b.com", {}) }), /is outside its domain/);
   assert.throws(() => build(one, { "a.com": group(null, { "x.b.com": 1 }) }), /has hosts but no rootHost/);
-  assert.throws(() => build(two, { "a.com": group("a.com", { "c.com": 1 }), "c.com": group(null, {}) }), /matches root "c\.com"/);
+  assert.throws(() => build(two, { "a.com": group("a.com", { "x.a.com": 1 }), "c.com": group(null, {}) }), /matches its own root "a\.com"/);
+  // Another root's domain is a record like any other site.
+  assert.doesNotThrow(() => build(two, { "a.com": group("a.com", { "c.com": 1 }), "c.com": group(null, {}) }));
   assert.throws(() => build(denied, { "a.com": group("www.a.com", { "x.ads.net": 1 }) }), /is under deny "\*\.ads\.net"/);
   assert.throws(() => build(denied, { "a.com": group("www.a.com", { "ads.net": 1 }) }), /"ads\.net" is under deny "\*\.ads\.net"/);
   for (const host of ["localhost", "__proto__", "10.0.0.1", "[::1]"]) {

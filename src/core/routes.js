@@ -1,11 +1,12 @@
-import { maskDomain } from "./hosts.js";
+import { maskDomain, rootOf } from "./hosts.js";
 
 // Which proxy carries a learned host, and which roots may use it.
 //
 // A PAC sees only the host, never the tab, so a name has one route for the whole browser. The route is decided per
 // site (registrable domain): a service sees every host of its site as one user, so a site split between proxies
-// would reach it from two IPs. Each site has one owner root, kept in `sites`; every learned host of the site, in any
-// group, goes through the owner's proxy. A root owns its own site; a site without a root belongs to the first root
+// would reach it from two IPs. A name in a root's domain goes the way of that root, whatever its registrable domain
+// (a root on kawasaki.jp spans many), so its site is the root's (siteIn). Each site has one owner root, kept in
+// `sites`; every learned host of the site, in any group, goes through the owner's proxy. A root owns its own site; a site without a root belongs to the first root
 // that learns one of its hosts; Route here hands a site to another root. A root that holds a host of a site owned by
 // a root on another proxy may not use it: that is a proxy conflict.
 
@@ -32,6 +33,42 @@ export function siteOf(name, psl) {
     cache.set(name, site);
   }
   return site;
+}
+
+const MAX_ROOT_LISTS = 8;
+const rootSiteCache = new WeakMap();
+
+// The site a name's route is decided for: the root's site for a name in a root's domain (the first root that covers
+// it, as root() in the User PAC), its own otherwise. `sitesIn(roots, psl)` answers for one list of roots and is taken
+// once per pass over many names; the answers are kept per list by its content, since every build of the System PAC
+// analyzes the User PAC anew and gets a new array of the same roots.
+export function sitesIn(roots, psl) {
+  let lists = rootSiteCache.get(psl);
+  if (lists === undefined) {
+    lists = new Map();
+    rootSiteCache.set(psl, lists);
+  }
+  const key = roots.join(" ");
+  let cache = lists.get(key);
+  if (cache === undefined) {
+    if (lists.size >= MAX_ROOT_LISTS) lists.clear();
+    cache = new Map();
+    lists.set(key, cache);
+  }
+  return (name) => {
+    let site = cache.get(name);
+    if (site === undefined) {
+      if (cache.size >= MAX_SITES) cache.clear();
+      const root = rootOf(name, roots);
+      site = siteOf(root === null ? name : maskDomain(root), psl);
+      cache.set(name, site);
+    }
+    return site;
+  };
+}
+
+export function siteIn(name, roots, psl) {
+  return sitesIn(roots, psl)(name);
 }
 
 // The host a root's proxy is asked for: the root page it learned from, or its domain before it has one.
@@ -89,7 +126,8 @@ function sameRecord(a, b) {
 // root owns its own site unless it handed it over; a root that was not declared before takes its site back.
 export function normalizeSites(sites, groups, roots, psl, previousRoots = roots) {
   const held = new Set();
-  for (const { hosts } of Object.values(groups)) for (const host of Object.keys(hosts)) held.add(siteOf(host, psl));
+  const siteOfHost = sitesIn(roots, psl);
+  for (const { hosts } of Object.values(groups)) for (const host of Object.keys(hosts)) held.add(siteOfHost(host));
   // One root per site in a valid User PAC; a stored one from an older version may have more, and the first keeps it.
   const rootSites = new Map();
   for (const mask of roots) if (!rootSites.has(siteOf(mask, psl))) rootSites.set(siteOf(mask, psl), mask);
@@ -103,17 +141,23 @@ export function normalizeSites(sites, groups, roots, psl, previousRoots = roots)
   return sites !== null && sites !== undefined && sameRecord(sites, next) ? sites : next;
 }
 
-// A root removed from the User PAC takes its sites with it: every group forgets the hosts of the sites it owned, and
-// whoever needs them again learns them anew, the site going to the first root that does.
-export function releaseSites(groups, sites, roots, psl) {
+// A root removed from the User PAC hands its sites on: every group keeps its hosts, and each site goes to the root that
+// learned one of its hosts first (the first mask in order on a tie), as a site nobody owns goes to its first learner.
+// A site no group holds is left without an owner, and normalizeSites drops it.
+export function releaseSites(sites, groups, roots, psl) {
   const released = new Set(Object.entries(sites ?? {}).filter(([, mask]) => !roots.includes(mask)).map(([site]) => site));
-  if (released.size === 0) return groups;
-  let next = groups;
-  for (const [mask, group] of Object.entries(groups)) {
-    const kept = Object.entries(group.hosts).filter(([host]) => !released.has(siteOf(host, psl)));
-    if (kept.length === Object.keys(group.hosts).length) continue;
-    if (next === groups) next = { ...groups };
-    next[mask] = { rootHost: group.rootHost, hosts: Object.fromEntries(kept) };
+  if (released.size === 0) return sites;
+  const next = { ...sites };
+  const times = {};
+  const siteOfHost = sitesIn(roots, psl);
+  for (const site of released) delete next[site];
+  for (const mask of Object.keys(groups).sort()) {
+    for (const [host, time] of Object.entries(groups[mask].hosts)) {
+      const site = siteOfHost(host);
+      if (!released.has(site) || (Object.hasOwn(times, site) && times[site] <= time)) continue;
+      times[site] = time;
+      next[site] = mask;
+    }
   }
   return next;
 }
@@ -123,9 +167,10 @@ export function releaseSites(groups, sites, roots, psl) {
 export function bootstrapSites(groups, roots, psl) {
   const sites = {};
   const times = {};
+  const siteOfHost = sitesIn(roots, psl);
   for (const mask of Object.keys(groups).sort()) {
     for (const [host, time] of Object.entries(groups[mask].hosts)) {
-      const site = siteOf(host, psl);
+      const site = siteOfHost(host);
       if (!Object.hasOwn(times, site) || time > times[site]) {
         times[site] = time;
         sites[site] = mask;
@@ -141,10 +186,11 @@ export function sitesOfState({ groups, sites }, roots, psl) {
 }
 
 // New sites a batch of learned hosts brings: each goes to the root that learned it, the first one on a tie.
-export function claimSites(sites, learned, psl) {
+export function claimSites(sites, learned, roots, psl) {
   let next = sites;
+  const siteOfHost = sitesIn(roots, psl);
   for (const [host, mask] of learned) {
-    const site = siteOf(host, psl);
+    const site = siteOfHost(host);
     if (Object.hasOwn(next, site)) continue;
     if (next === sites) next = { ...sites };
     next[site] = mask;
@@ -153,10 +199,11 @@ export function claimSites(sites, learned, psl) {
 }
 
 // Route here: the root takes the sites of these names. Nothing changes for a site it owns already.
-export function routeSites(sites, mask, names, psl) {
+export function routeSites(sites, mask, names, roots, psl) {
   let next = sites;
+  const siteOfName = sitesIn(roots, psl);
   for (const name of names) {
-    const site = siteOf(name, psl);
+    const site = siteOfName(name);
     if (next[site] === mask) continue;
     if (next === sites) next = { ...sites };
     next[site] = mask;
@@ -173,26 +220,33 @@ export function verdict(mask, owner, answers) {
   return answers[mask] === answers[owner] ? SAME : CONFLICT;
 }
 
-// The owner of the site of a name, or undefined.
-export function ownerOf(sites, name, psl) {
-  const site = siteOf(name, psl);
-  return Object.hasOwn(sites, site) ? sites[site] : undefined;
+// The owner of the site of a name (siteIn), or undefined; `ownersIn` answers for one list of roots.
+export function ownersIn(sites, roots, psl) {
+  const siteOfName = sitesIn(roots, psl);
+  return (name) => {
+    const site = siteOfName(name);
+    return Object.hasOwn(sites, site) ? sites[site] : undefined;
+  };
 }
 
-// What each root's DNR rules allow: its learned hosts and the domains of roots whose site goes through the same proxy,
-// its own included. Everything a record covers is of the record's site, so a record is allowed or blocked whole.
+export function ownerOf(sites, name, roots, psl) {
+  return ownersIn(sites, roots, psl)(name);
+}
+
+// What each root's DNR rules allow: its learned hosts — other roots' domains included, which a root learns like any
+// other site — and its own domain while its site goes through its proxy. Everything a record covers is of the record's
+// site, so a record is allowed or blocked whole.
 export function routesOf({ groups, sites }, roots, answers, psl) {
   const routes = new Map();
+  const ownerOfName = ownersIn(sites, roots, psl);
   for (const mask of Object.keys(groups)) {
     const allow = [];
     const allowExact = [];
     for (const host of Object.keys(groups[mask].hosts)) {
-      if (verdict(mask, ownerOf(sites, host, psl), answers) !== SAME) continue;
+      if (verdict(mask, ownerOfName(host), answers) !== SAME) continue;
       (psl.isPublicSuffix(host) ? allowExact : allow).push(host);
     }
-    for (const root of roots) {
-      if (verdict(mask, ownerOf(sites, root, psl), answers) === SAME) allow.push(root);
-    }
+    if (verdict(mask, ownerOfName(mask), answers) === SAME) allow.push(mask);
     routes.set(mask, { allow, allowExact });
   }
   return routes;
@@ -201,9 +255,10 @@ export function routesOf({ groups, sites }, roots, answers, psl) {
 // Roots whose own site was handed to a root on another proxy: their pages, the top frame included, are blocked. A root
 // that shares its site with an earlier root (a stored User PAC from an older version) is left to that root's rules.
 export function handedRoots({ groups, sites }, roots, answers, psl) {
+  const ownerOfName = ownersIn(sites, roots, psl);
   return roots.filter((mask) => {
     if (!Object.hasOwn(groups, mask)) return false;
-    const owner = ownerOf(sites, mask, psl);
+    const owner = ownerOfName(mask);
     return verdict(mask, owner, answers) !== SAME && siteOf(owner, psl) !== siteOf(mask, psl);
   });
 }
@@ -212,37 +267,39 @@ export function handedRoots({ groups, sites }, roots, answers, psl) {
 // of roots that handed their site to it. A host of a site without an owner has no route. `pacRoots` are the roots that
 // still route their own site.
 export function routedGroups(groups, sites, roots, psl) {
-  const pacRoots = roots.filter((mask) => ownerOf(sites, mask, psl) === mask);
+  const ownerOfName = ownersIn(sites, roots, psl);
+  const pacRoots = roots.filter((mask) => ownerOfName(mask) === mask);
   const routed = {};
   for (const mask of Object.keys(groups)) routed[mask] = { rootHost: rootHostOf(mask, groups), hosts: {} };
   for (const { hosts } of Object.values(groups)) {
     for (const host of Object.keys(hosts)) {
-      const owner = ownerOf(sites, host, psl);
+      const owner = ownerOfName(host);
       if (owner === undefined || !Object.hasOwn(routed, owner)) continue;
       routed[owner].hosts[host] = 1;
     }
   }
   for (const mask of roots) {
-    const owner = ownerOf(sites, mask, psl);
+    const owner = ownerOfName(mask);
     if (owner !== mask && owner !== undefined && Object.hasOwn(routed, owner)) routed[owner].hosts[maskDomain(mask)] = 1;
   }
   return { routed, pacRoots };
 }
 
-// For the viewer: each root's proxy, the site, owner and verdict of its own domain and of every host it holds — learned,
-// or of a root's domain its pages requested (`uses`) — the domains of roots that handed their site to it, and for the
-// sites it owns, the roots a proxy conflict blocks. A root's domain is never learned, but it is a site of the root that
-// routes it like any learned one.
+// For the viewer: each root's proxy, the site, owner and verdict of its own domain and of every host it holds, the
+// domains of roots that handed their site to it, and for the sites it owns, the roots a proxy conflict blocks.
 export function sharedRoutes(state, psl) {
   const answers = answersOf(state);
   const { groups } = state;
-  const sites = sitesOfState(state, Object.keys(groups), psl);
+  const declared = state.analysis?.roots ?? Object.keys(groups);
+  const sites = sitesOfState(state, declared, psl);
   const roots = Object.fromEntries(
     Object.keys(groups).map((mask) => [mask, { proxy: answers[mask] ?? null, root: null, records: {}, taken: {}, blocks: {} }]),
   );
+  const siteOfName = sitesIn(declared, psl);
+  const ownerOfName = ownersIn(sites, declared, psl);
   const routeOf = (mask, name) => {
-    const owner = ownerOf(sites, name, psl);
-    return { site: siteOf(name, psl), owner: owner ?? null, verdict: verdict(mask, owner, answers), ownerProxy: owner === undefined ? null : (answers[owner] ?? null) };
+    const owner = ownerOfName(name);
+    return { site: siteOfName(name), owner: owner ?? null, verdict: verdict(mask, owner, answers), ownerProxy: owner === undefined ? null : (answers[owner] ?? null) };
   };
   const block = (owner, site, mask) => {
     if (!Object.hasOwn(roots, owner)) return;
@@ -251,7 +308,7 @@ export function sharedRoutes(state, psl) {
   };
   for (const mask of Object.keys(groups)) {
     roots[mask].root = routeOf(mask, mask);
-    for (const host of [...Object.keys(groups[mask].hosts), ...Object.keys(state.uses?.[mask] ?? {})]) {
+    for (const host of Object.keys(groups[mask].hosts)) {
       const route = routeOf(mask, host);
       roots[mask].records[host] = route;
       if (route.verdict === CONFLICT) block(route.owner, route.site, mask);

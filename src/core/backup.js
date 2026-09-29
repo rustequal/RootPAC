@@ -1,8 +1,8 @@
 import { analyzeUserPac } from "./analyze.js";
 
-// Schema 2 adds the owner of each site (core/routes.js), schema 3 the hosts of root domains each root's pages requested
-// (core/groups.js); older backups are read without them.
-export const BACKUP_SCHEMA_VERSION = 3;
+// Schema 2 adds the owner of each site (core/routes.js); schema 1 backups are read without owners. Schema 3 (1.0.34)
+// also carried the root hosts a root's pages requested, which are learned records now: it reads as schema 2.
+export const BACKUP_SCHEMA_VERSION = 2;
 
 const BACKUP_KEYS = {
   1: ["groups", "schemaVersion", "userPac"],
@@ -20,7 +20,7 @@ function hasExactKeys(value, keys) {
   return own.length === keys.length && own.every((key, index) => key === keys[index]);
 }
 
-export function exportBackup({ userPac, groups, sites, uses }) {
+export function exportBackup({ userPac, groups, sites }) {
   if (userPac === null) throw new Error("No user PAC configured");
   return {
     schemaVersion: BACKUP_SCHEMA_VERSION,
@@ -29,19 +29,7 @@ export function exportBackup({ userPac, groups, sites, uses }) {
       Object.entries(groups).map(([mask, { rootHost, hosts }]) => [mask, { rootHost, hosts: { ...hosts } }]),
     ),
     sites: { ...(sites ?? {}) },
-    uses: Object.fromEntries(Object.entries(uses ?? {}).map(([mask, records]) => [mask, { ...records }])),
   };
-}
-
-function readUses(uses) {
-  if (!isPlainObject(uses)) throw new Error("Backup uses must be an object");
-  const next = {};
-  for (const [mask, records] of Object.entries(uses)) {
-    const valid = isPlainObject(records) && Object.values(records).every((times) => Array.isArray(times) && times.length === 2 && times.every((time) => Number.isSafeInteger(time) && time >= 0));
-    if (!valid) throw new Error(`Backup uses of ${JSON.stringify(mask)} must map hosts to [first, last] times`);
-    next[mask] = Object.fromEntries(Object.entries(records).map(([host, times]) => [host, [...times]]));
-  }
-  return next;
 }
 
 function readGroup(mask, group) {
@@ -75,6 +63,5 @@ export function readBackup(backup, psl = null) {
   if (!result.ok) return { ok: false, errors: result.errors };
   const groups = {};
   for (const [mask, group] of Object.entries(backup.groups)) groups[mask] = readGroup(mask, group);
-  const uses = backup.schemaVersion >= 3 ? readUses(backup.uses) : {};
-  return { ok: true, userPac: backup.userPac, analysis: { roots: result.roots, deny: result.deny, bypass: result.bypass }, groups, sites: sites === null ? null : { ...sites }, uses };
+  return { ok: true, userPac: backup.userPac, analysis: { roots: result.roots, deny: result.deny, bypass: result.bypass }, groups, sites: sites === null ? null : { ...sites } };
 }

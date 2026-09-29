@@ -1,4 +1,5 @@
 import { download, element, formatTime, onStored, readLocal, send } from "../shared/rpc.js";
+import { maskDomain } from "../../core/hosts.js";
 import { header } from "../shared/logo.js";
 
 document.getElementById("head").replaceWith(header("System PAC"));
@@ -8,7 +9,7 @@ const groupsBox = document.getElementById("groups");
 const filter = document.getElementById("filter");
 const errorBox = document.getElementById("error");
 
-let state = { appliedPac: "", groups: new Map(), seen: new Map(), uses: new Map(), routes: {} };
+let state = { appliedPac: "", groups: new Map(), seen: new Map(), routes: {} };
 const open = new Set();
 
 // Which proxy a host goes through for this root. Every host of a site goes through the proxy of the root that owns the
@@ -62,11 +63,9 @@ async function run(button, message) {
   }
 }
 
-// The sites of a group, the root's own first: each with its route (the same for every host of the site), the hosts of
-// this group in it — learned, or of a root's domain the root's pages requested — and the root domains in it: the
-// group's own, and those of roots that handed their site to this one. A root's domain is never learned, but it is a
-// site of the group that routes it like any learned one. `hosts` maps each host to the time it was first learned or
-// requested.
+// The sites of a group, the root's own first: each with its route (the same for every host of the site), the learned
+// hosts of this group in it — other roots' domains included — and the root domains in it: the group's own, and those
+// of roots that handed their site to this one. A root domain that is also a record is listed once, as the record.
 function sitesOf(mask, hosts, route) {
   const rootRoute = route?.root ?? { site: mask, owner: mask, verdict: "same", ownerProxy: null };
   const sites = new Map([[rootRoute.site, { route: rootRoute, hosts: [], roots: [mask], own: true }]]);
@@ -76,8 +75,7 @@ function sitesOf(mask, hosts, route) {
   };
   for (const host of Object.keys(hosts).sort()) siteFor(route?.records[host] ?? { site: host, owner: mask, verdict: "same", ownerProxy: null }).hosts.push(host);
   for (const root of Object.keys(route?.taken ?? {}).sort()) siteFor(route.taken[root]).roots.push(root);
-  // A root's domain its pages requested is listed once, as a requested host.
-  for (const entry of sites.values()) entry.roots = entry.roots.filter((root) => !entry.hosts.includes(root.replace(/^\*\./, "")));
+  for (const entry of sites.values()) entry.roots = entry.roots.filter((root) => !entry.hosts.includes(maskDomain(root)));
   const others = [...sites.keys()].filter((site) => site !== rootRoute.site).sort();
   return [rootRoute.site, ...others].map((site) => [site, sites.get(site)]);
 }
@@ -105,7 +103,7 @@ function siteRows(mask, sites, hosts, seen, needle, route) {
     const actions = element("td", "actions");
     if (list.length > 0) {
       const remove = element("button", "small", "Remove site");
-      remove.title = `Remove every host of ${site} from ${mask}`;
+      remove.title = `Remove every learned host of ${site} from ${mask}`;
       remove.addEventListener("click", () => run(remove, { type: "removeSite", mask, site }));
       actions.append(remove);
     }
@@ -119,11 +117,11 @@ function siteRows(mask, sites, hosts, seen, needle, route) {
       line.append(cell);
       table.append(line);
     };
-    // The site row stands for a root domain of its own name; one host of the site's own name needs no line either.
-    const shownRoots = roots.filter((root) => root !== site);
-    if (shownRoots.length + list.length === 0 || (shownRoots.length === 0 && list.length === 1 && list[0] === site)) continue;
-    // A root's domain its pages have not requested yet has no times and nothing to remove.
-    for (const root of shownRoots) sub(own && root === mask ? `${root} · root` : root, "—", "—");
+    // The site row stands for a root domain of the site's name, and for a single record of it.
+    const lines = roots.filter((root) => maskDomain(root) !== site);
+    if (lines.length === 0 && (list.length === 0 || (list.length === 1 && list[0] === site))) continue;
+    // A root domain is not a record: it has no times and nothing to remove.
+    for (const root of lines) sub(own && root === mask ? `${root} · root` : root, "—", "—");
     for (const host of list) {
       const remove = element("button", "small", "Remove");
       remove.title = `Remove ${host} from ${mask}`;
@@ -142,14 +140,7 @@ function renderGroups() {
   const needle = filter.value.trim().toLowerCase();
   const boxes = [];
   for (const [mask, group] of [...state.groups.entries()].sort()) {
-    // The learned hosts and the hosts of root domains the root's pages requested, with their first and last times.
-    const learnedTimes = { ...group.hosts };
-    const seenTimes = { ...(state.seen.get(mask) ?? {}) };
-    for (const [host, [first, last]] of Object.entries(state.uses.get(mask) ?? {})) {
-      learnedTimes[host] = first;
-      seenTimes[host] = last;
-    }
-    const hosts = Object.keys(learnedTimes);
+    const hosts = Object.keys(group.hosts);
     const route = state.routes[mask];
     const names = [...hosts, ...Object.keys(route?.taken ?? {})];
     if (needle !== "" && !mask.includes(needle) && !names.some((host) => host.includes(needle))) continue;
@@ -159,7 +150,7 @@ function renderGroups() {
     summary.append(element("span", "mask", mask));
     // The root's proxy and counts only: which sites are blocked and through which roots they go is in the table.
     // Hosts: the learned ones and the root domains the group lists, its own included.
-    const sites = sitesOf(mask, learnedTimes, route);
+    const sites = sitesOf(mask, group.hosts, route);
     const hostCount = sites.reduce((sum, [, site]) => sum + site.hosts.length + site.roots.length, 0);
     const info = element("span", "muted grow", `${route?.proxy ?? "proxy not checked yet"} · ${sites.length} site${sites.length === 1 ? "" : "s"}, ${hostCount} host${hostCount === 1 ? "" : "s"}`);
     const blocked = sites.filter(([, site]) => site.route.verdict === "conflict").length;
@@ -168,7 +159,7 @@ function renderGroups() {
     const clear = element("button", "small", "Clear group");
     clear.addEventListener("click", async (event) => {
       event.preventDefault();
-      if (!confirm(`Clear every host of ${mask}?`)) return;
+      if (!confirm(`Clear every learned host of ${mask}?`)) return;
       try {
         const result = await send({ type: "clearGroup", mask });
         if (!result.ok) showMessage(result.error);
@@ -186,9 +177,9 @@ function renderGroups() {
         else open.delete(mask);
       }
       if (!box.open) return;
-      box.replaceChildren(summary, siteRows(mask, sites, learnedTimes, seenTimes, needle, route));
+      box.replaceChildren(summary, siteRows(mask, sites, group.hosts, state.seen.get(mask) ?? {}, needle, route));
     });
-    if (box.open) box.append(siteRows(mask, sites, learnedTimes, seenTimes, needle, route));
+    if (box.open) box.append(siteRows(mask, sites, group.hosts, state.seen.get(mask) ?? {}, needle, route));
     boxes.push(box);
   }
   groupsBox.replaceChildren(...(boxes.length === 0 ? [element("p", "muted", "No groups")] : boxes));
@@ -202,7 +193,6 @@ async function render() {
     userPac: stored.userPac,
     groups: new Map(Object.entries(stored).filter(([key]) => key.startsWith("group:")).map(([key, value]) => [key.slice(6), value])),
     seen: new Map(Object.entries(stored).filter(([key]) => key.startsWith("seen:")).map(([key, value]) => [key.slice(5), value])),
-    uses: new Map(Object.entries(stored).filter(([key]) => key.startsWith("uses:")).map(([key, value]) => [key.slice(5), value])),
   };
   pac.textContent = state.appliedPac === "" ? "—" : state.appliedPac;
   errorBox.replaceChildren();
@@ -221,7 +211,7 @@ let refresh = 0;
 const VIEWED = new Set(["appliedPac", "userPac", "analysis", "proxies", "sites"]);
 
 onStored((changes) => {
-  if (!Object.keys(changes).some((key) => VIEWED.has(key) || key.startsWith("group:") || key.startsWith("seen:") || key.startsWith("uses:"))) return;
+  if (!Object.keys(changes).some((key) => VIEWED.has(key) || key.startsWith("group:") || key.startsWith("seen:"))) return;
   clearTimeout(refresh);
   refresh = setTimeout(render, 200);
 });

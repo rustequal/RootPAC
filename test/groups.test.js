@@ -35,13 +35,13 @@ test("hosts at or under a deny domain are removed", () => {
   assert.deepEqual(next["a.com"], { rootHost: "www.a.com", hosts: { "cdn.a.net": 1 } });
 });
 
-test("hosts that became roots are removed and rootHost is kept", () => {
-  const next = reconcileGroups({ "a.com": group("www.a.com", { "cdn.a.net": 1 }) }, {
+test("a group keeps the hosts of another root's domain and drops those of its own, and rootHost is kept", () => {
+  const next = reconcileGroups({ "a.com": group("www.a.com", { "cdn.a.net": 1, "x.a.com": 2 }) }, {
     roots: ["a.com", "a.net"],
     deny: [],
     bypass: [],
   });
-  assert.deepEqual(next["a.com"], { rootHost: "www.a.com", hosts: {} });
+  assert.deepEqual(next["a.com"], { rootHost: "www.a.com", hosts: { "cdn.a.net": 1 } });
   assert.deepEqual(next["a.net"], { rootHost: null, hosts: {} });
 });
 
@@ -127,9 +127,11 @@ test("a single host, a host equal to its domain and public suffix neighbours sta
   assert.equal(result.groups, groups);
 });
 
-test("aggregation is refused when the domain lies under a root or matches or covers a deny domain", () => {
+test("aggregation is refused when the domain matches or covers a deny domain, and allowed under another root", () => {
+  const under = { roots: ["a.com", "cdn.net"], deny: [], bypass: [] };
+  const other = { "a.com": { rootHost: "www.a.com", hosts: { "x.cdn.net": 1, "y.cdn.net": 2 } }, "cdn.net": { rootHost: null, hosts: {} } };
+  assert.deepEqual(agg(other, {}, under).groups["a.com"].hosts, { "cdn.net": 1 });
   const cases = [
-    { roots: ["a.com", "cdn.net"], deny: [], bypass: [] },
     { roots: ["a.com"], deny: ["*.ads.cdn.net"], bypass: [] },
     { roots: ["a.com"], deny: ["cdn.net"], bypass: [] },
   ];

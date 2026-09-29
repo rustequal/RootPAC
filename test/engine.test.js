@@ -64,7 +64,7 @@ function learn(store, engine, host, mask = "instagram.com", rootHost = "www.inst
   return store.run((state) => {
     const group = state.groups[mask];
     const groups = { ...state.groups, [mask]: { rootHost: group.rootHost ?? rootHost, hosts: { ...group.hosts, [host]: 1 } } };
-    const sites = claimSites(state.sites, [[host, mask]], PSL);
+    const sites = claimSites(state.sites, [[host, mask]], state.analysis.roots, PSL);
     return engine.commit({ ...state, groups, sites, appliedPac: buildSystemPac(state.userPac, groups, PSL, sites) });
   });
 }
@@ -240,7 +240,9 @@ test("changing roots never allows a host the PAC does not proxy yet", async () =
   await learn(store, engine, "static.cdninstagram.com");
   const moved = fixture("user.pac").replace('root(host, "instagram.com")', 'root(host, "instagram.com") || root(host, "cdninstagram.com")');
   await commands.dispatch({ type: "saveUserPac", text: moved });
-  assert.deepEqual(allowedHosts(browser.allRules()), []);
+  // The record stays with instagram.com, now of another root's domain, and goes through that root on the same proxy.
+  assert.deepEqual(Object.keys(store.state.groups["instagram.com"].hosts), ["static.cdninstagram.com"]);
+  assert.deepEqual(allowedHosts(browser.allRules()), ["static.cdninstagram.com"]);
   assert.equal(browser.rules.get(RULE_IDS.block).condition.topDomains.join(), "cdninstagram.com,instagram.com");
   assert.equal(browser.rules.get(RULE_IDS.frame).condition.requestDomains.join(), "cdninstagram.com,instagram.com");
   assert.equal(browser.sessionRules.get(RULE_IDS.roots).condition.requestDomains.join(), "cdninstagram.com,instagram.com");

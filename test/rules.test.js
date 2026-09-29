@@ -184,11 +184,14 @@ const SAME_PROXY = { "a.com": { host: "www.a.com", answer: "PROXY p:1" }, "b.com
 const OTHER_PROXY = { "a.com": { host: "www.a.com", answer: "PROXY p:1" }, "b.com": { host: "www.b.com", answer: "PROXY q:1" } };
 const allowOf = (built, root) => built.contexts.find((item) => item.root === root);
 
-test("roots on the same proxy may use each other's sites, root domains included", () => {
+test("roots on the same proxy may use each other's sites, another root's domain only as a record it learned", () => {
   const built = policyOf({ enabled: true, analysis: TWO, groups: SHARED, proxies: SAME_PROXY, sites: SITES }, PSL);
-  assert.deepEqual(allowOf(built, "a.com"), context("a.com", { allow: ["a.com", "b.com", "cdn.net"] }));
-  assert.deepEqual(allowOf(built, "b.com"), context("b.com", { allow: ["a.com", "b.com", "cdn.net", "img.org"] }));
+  assert.deepEqual(allowOf(built, "a.com"), context("a.com", { allow: ["a.com", "cdn.net"] }));
+  assert.deepEqual(allowOf(built, "b.com"), context("b.com", { allow: ["b.com", "cdn.net", "img.org"] }));
   assert.deepEqual(built.handed, []);
+  const learned = { ...SHARED, "a.com": { rootHost: "www.a.com", hosts: { "cdn.net": 4, "b.com": 5 } } };
+  assert.deepEqual(allowOf(policyOf({ enabled: true, analysis: TWO, groups: learned, proxies: SAME_PROXY, sites: SITES }, PSL), "a.com"), context("a.com", { allow: ["a.com", "b.com", "cdn.net"] }));
+  assert.deepEqual(allowOf(policyOf({ enabled: true, analysis: TWO, groups: learned, proxies: OTHER_PROXY, sites: SITES }, PSL), "a.com"), context("a.com", { allow: ["a.com", "cdn.net"] }));
 });
 
 test("a host of a site owned by a root on another proxy is blocked, and so is that root's domain", () => {
@@ -206,7 +209,7 @@ test("a root whose proxy is not checked yet shares nothing with other roots", ()
 
 test("a host of a site without an owner is blocked for every root", () => {
   const built = policyOf({ enabled: true, analysis: TWO, groups: SHARED, proxies: SAME_PROXY, sites: { "a.com": "a.com", "b.com": "b.com", "cdn.net": "a.com" } }, PSL);
-  assert.deepEqual(allowOf(built, "b.com"), context("b.com", { allow: ["a.com", "b.com", "cdn.net"] }));
+  assert.deepEqual(allowOf(built, "b.com"), context("b.com", { allow: ["b.com", "cdn.net"] }));
 });
 
 test("a root that handed its site to a root on another proxy is closed, its pages included", () => {
@@ -214,7 +217,7 @@ test("a root that handed its site to a root on another proxy is closed, its page
   const built = policyOf({ enabled: true, analysis: TWO, groups: SHARED, proxies: OTHER_PROXY, sites }, PSL);
   assert.deepEqual(built.handed, ["b.com"]);
   assert.deepEqual(allowOf(built, "b.com"), context("b.com", { allow: ["img.org"] }));
-  assert.deepEqual(allowOf(built, "a.com"), context("a.com", { allow: ["a.com", "b.com", "cdn.net"] }));
+  assert.deepEqual(allowOf(built, "a.com"), context("a.com", { allow: ["a.com", "cdn.net"] }));
   const rule = buildRules(built).dynamic.find(({ id }) => id === RULE_IDS.handed);
   assert.deepEqual(rule, { id: RULE_IDS.handed, priority: 3, action: { type: "block" }, condition: { requestDomains: ["b.com"], resourceTypes: ["main_frame"] } });
   assert.deepEqual(buildRules(closedPolicy(built)).dynamic.find(({ id }) => id === RULE_IDS.handed), rule);

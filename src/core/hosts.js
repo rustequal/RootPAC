@@ -70,11 +70,13 @@ export function underDeny(host, deny) {
   return deny.some((mask) => covers(maskDomain(mask), host));
 }
 
-export function isLearnable(host, { roots, deny, bypass }, index, psl) {
+// Whether root `mask` may learn the host. Its own domain never: the root mask routes it. Another root's domain it may,
+// like any other site: the record goes through the owner of its site and lets the root's pages use it (core/routes.js).
+export function isLearnable(host, { roots, deny, bypass }, index, psl, mask) {
   return (
     isLearnableName(host) &&
     learnedOwner(host, index, psl) === null &&
-    rootOf(host, roots) === null &&
+    rootOf(host, roots) !== mask &&
     !underDeny(host, deny) &&
     firstMatch(host, bypass) === null &&
     !coversBypass(host, bypass)

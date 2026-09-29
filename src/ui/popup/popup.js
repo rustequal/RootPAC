@@ -204,11 +204,11 @@ document.getElementById("log").addEventListener("click", () => {
   chrome.tabs.create({ url: chrome.runtime.getURL("src/ui/log/log.html") });
 });
 
-// What the popup shows: the settings, the groups and root hosts (the root's known hosts) and owners, the worker's state and this tab.
+// What the popup shows: the settings, the groups (the root's known hosts) and owners, the worker's state and this tab.
 const SHOWN = new Set(["enabled", "userPac", "appliedPac", "userPacErrors", "analysis", "sites", "proxies", "lastLearnError", "armed", "startupError"]);
 
 onStored((changes) => {
   const tabKey = shownTab === null ? null : `tab:${shownTab}`;
-  if (Object.keys(changes).some((key) => SHOWN.has(key) || key.startsWith("group:") || key.startsWith("uses:") || key === tabKey || (shownTab === null && key.startsWith("tab:")))) refresh();
+  if (Object.keys(changes).some((key) => SHOWN.has(key) || key.startsWith("group:") || key === tabKey || (shownTab === null && key.startsWith("tab:")))) refresh();
 });
 refresh();

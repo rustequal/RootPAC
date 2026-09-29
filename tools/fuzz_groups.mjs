@@ -244,11 +244,11 @@ function fuzz(seed) {
           if (!isHostName(rootHost) || learnedOwner(host, own, PSL) !== null) continue;
           // A root learns the record that already routes the host, like the learner does.
           const target = learnedOwner(host, index, PSL) ?? host;
-          if (!batch.some(([name, source]) => name === target && source.mask === mask) && isLearnable(target, analysis, own, PSL)) batch.push([target, { mask, rootHost, host }]);
+          if (!batch.some(([name, source]) => name === target && source.mask === mask) && isLearnable(target, analysis, own, PSL, mask)) batch.push([target, { mask, rootHost, host }]);
         }
         if (batch.length > 0) {
           for (const [target] of batch) learnedAlone.add(target);
-          const sites = claimSites(state.sites, batch.map(([target, { mask }]) => [target, mask]), PSL);
+          const sites = claimSites(state.sites, batch.map(([target, { mask }]) => [target, mask]), analysis.roots, PSL);
           state = { ...aggregateGroups(mergeGroups(state.groups, batch, step), state.seen, analysis, PSL), sites };
           for (const [, { mask, host }] of batch) if (learnedOwner(host, ownIndex(state.groups, mask), PSL) === null) flag("a learned host is unknown to its root", { tag, host, mask });
         }
@@ -260,9 +260,9 @@ function fuzz(seed) {
         const previousRoots = analysis.roots;
         analysis = { roots: result.roots, deny: result.deny, bypass: result.bypass };
         const adopted = adoptLegacyGroups(state.groups, state.seen, analysis.roots);
-        const reconciled = releaseSites(reconcileGroups(adopted.groups, analysis), state.sites, analysis.roots, PSL);
+        const reconciled = reconcileGroups(adopted.groups, analysis);
         const next = aggregateGroups(reconciled, pruneSeen(adopted.seen, reconciled), analysis, PSL);
-        state = { ...next, sites: normalizeSites(state.sites, next.groups, analysis.roots, PSL, previousRoots) };
+        state = { ...next, sites: normalizeSites(releaseSites(state.sites, next.groups, analysis.roots, PSL), next.groups, analysis.roots, PSL, previousRoots) };
       } else if (roll < 0.93) {
         const masks = Object.keys(state.groups).filter((mask) => Object.keys(state.groups[mask].hosts).length > 0);
         if (masks.length === 0) continue;
@@ -270,7 +270,7 @@ function fuzz(seed) {
         if (random() < 0.5) {
           // Route here: a root takes the site of one of its hosts, or another root's whole site.
           const name = random() < 0.3 ? s.pick(analysis.roots) : s.pick(Object.keys(state.groups[mask].hosts));
-          state = { ...state, sites: routeSites(state.sites, mask, [name], PSL) };
+          state = { ...state, sites: routeSites(state.sites, mask, [name], analysis.roots, PSL) };
         } else {
           const hosts = { ...state.groups[mask].hosts };
           delete hosts[s.pick(Object.keys(hosts))];
@@ -313,7 +313,7 @@ function orderIndependence(seed) {
       let groups = reconcileGroups({}, analysis);
       for (let i = 0; i < hosts.length; i += size) {
         const index = hostIndex(groups);
-        const batch = new Map(hosts.slice(i, i + size).filter((host) => isLearnable(host, analysis, index, PSL)).map((host) => [host, { mask: "root.org", rootHost: "root.org" }]));
+        const batch = new Map(hosts.slice(i, i + size).filter((host) => isLearnable(host, analysis, index, PSL, "root.org")).map((host) => [host, { mask: "root.org", rootHost: "root.org" }]));
         if (batch.size > 0) groups = aggregateGroups(mergeGroups(groups, batch, i), {}, analysis, PSL).groups;
       }
       return Object.keys(groups["root.org"].hosts).sort().join(" ");

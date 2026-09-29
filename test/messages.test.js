@@ -116,13 +116,14 @@ test("saving a new User PAC cleans up groups and seen records", async () => {
   const { area, browser, commands } = await setup(TRAINED);
   const text = 'deny("*.ads.net");\nfunction FindProxyForURL(url, host) {\n  return root(host, "a.com") || root(host, "b.com") ? "PROXY p:2" : "DIRECT";\n}';
   assert.equal((await commands.dispatch({ type: "saveUserPac", text })).ok, true);
-  assert.deepEqual(area.items["group:a.com"], { rootHost: "www.a.com", hosts: { "cdn.a.net": 1 } });
+  // api.b.com is now of another root's domain: a.com keeps it as a record of the site b.com, which b.com owns.
+  assert.deepEqual(area.items["group:a.com"], { rootHost: "www.a.com", hosts: { "api.b.com": 3, "cdn.a.net": 1 } });
   assert.deepEqual(area.items["group:b.com"], { rootHost: null, hosts: {} });
-  assert.deepEqual(area.items["seen:a.com"], { "cdn.a.net": 10 });
+  assert.equal(area.items.sites["b.com"], "b.com");
   assert.equal(Object.hasOwn(area.items, "group:old.com"), false);
   assert.equal(Object.hasOwn(area.items, "seen:old.com"), false);
   assert.match(browser.pac(), /"cdn\.a\.net": 1/);
-  assert.doesNotMatch(browser.pac(), /ads\.net": 1|x\.old\.net|api\.b\.com/);
+  assert.doesNotMatch(browser.pac(), /ads\.net": 1|x\.old\.net/);
 });
 
 test("saving while disabled stores the PAC without touching the browser", async () => {

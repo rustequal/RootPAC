@@ -83,8 +83,8 @@ test("learned hosts never match or cover a bypass domain", () => {
   assert.throws(() => buildSystemPac(USER_PAC, withHost("example.org"), PSL), /covers bypass "static\.example\.org"/);
   assert.throws(() => buildSystemPac(USER_PAC, withHost("static.example.org"), PSL), /matches bypass/);
   const index = hostIndex(base);
-  for (const host of ["x.ru", "a.b.xn--p1ai", "example.org", "static.example.org"]) assert.equal(isLearnable(host, ANALYSIS, index, PSL), false, host);
-  assert.equal(isLearnable("cdn.example.org", ANALYSIS, index, PSL), true);
+  for (const host of ["x.ru", "a.b.xn--p1ai", "example.org", "static.example.org"]) assert.equal(isLearnable(host, ANALYSIS, index, PSL, "a.com"), false, host);
+  assert.equal(isLearnable("cdn.example.org", ANALYSIS, index, PSL, "a.com"), true);
   const reconciled = reconcileGroups({ ...base, "a.com": { rootHost: "www.a.com", hosts: { "x.ru": 1, "example.org": 2, "cdn.b.net": 3 } } }, ANALYSIS);
   assert.deepEqual(reconciled["a.com"].hosts, { "cdn.b.net": 3 });
 });

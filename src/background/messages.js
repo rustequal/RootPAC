@@ -2,8 +2,8 @@ import { analyzeUserPac } from "../core/analyze.js";
 import { exportBackup, readBackup } from "../core/backup.js";
 import { buildSystemPac } from "../core/build.js";
 import { maskDomain, rootOf } from "../core/hosts.js";
-import { adoptLegacyGroups, aggregateGroups, pruneSeen, reconcileGroups, reconcileUses } from "../core/groups.js";
-import { answersOf, bootstrapSites, normalizeSites, proxiesOf, releaseSites, routeSites, sharedRoutes, siteOf, sitesOfState } from "../core/routes.js";
+import { adoptLegacyGroups, aggregateGroups, pruneSeen, reconcileGroups } from "../core/groups.js";
+import { answersOf, bootstrapSites, normalizeSites, proxiesOf, releaseSites, routeSites, sharedRoutes, siteIn, siteOf, sitesOfState } from "../core/routes.js";
 import { trialAnswers, trialErrors, trialPlan } from "../core/trial.js";
 import { NO_LOG } from "./log.js";
 
@@ -17,14 +17,6 @@ function requireGroup(state, mask) {
   return state.groups[mask];
 }
 
-// The root hosts of every root with those of `mask` replaced; a root without any has no record.
-function withUses(uses, mask, records) {
-  const next = { ...(uses ?? {}) };
-  if (Object.keys(records).length === 0) delete next[mask];
-  else next[mask] = records;
-  return next;
-}
-
 function requireValidUserPac(state) {
   if (state.userPacErrors !== null) throw new Error("User PAC must be fixed first");
 }
@@ -35,9 +27,9 @@ export function createCommands({ store, engine, checker, learner, log = NO_LOG, 
   const normalize = (state, analysis) => {
     const adopted = adoptLegacyGroups(state.groups, state.seen, analysis.roots);
     const owners = state.sites ?? bootstrapSites(adopted.groups, state.analysis?.roots ?? analysis.roots, store.psl);
-    const reconciled = releaseSites(reconcileGroups(adopted.groups, analysis), owners, analysis.roots, store.psl);
+    const reconciled = reconcileGroups(adopted.groups, analysis);
     const { groups, seen } = aggregateGroups(reconciled, pruneSeen(adopted.seen, reconciled), analysis, store.psl);
-    const sites = normalizeSites(owners, groups, analysis.roots, store.psl, state.analysis?.roots ?? []);
+    const sites = normalizeSites(releaseSites(owners, groups, analysis.roots, store.psl), groups, analysis.roots, store.psl, state.analysis?.roots ?? []);
     return { groups, seen, sites };
   };
 
@@ -67,8 +59,7 @@ export function createCommands({ store, engine, checker, learner, log = NO_LOG, 
     if (errors.length > 0) return { ok: false, errors };
     return store.run(async (state) => {
       const { groups, seen, sites } = normalize(state, analysis);
-      const uses = reconcileUses(state.uses ?? {}, analysis.roots);
-      const next = rebuild({ ...state, userPac: text, analysis, userPacErrors: null, proxies: proxiesOf(groups, answers), uses }, groups, seen, sites);
+      const next = rebuild({ ...state, userPac: text, analysis, userPacErrors: null, proxies: proxiesOf(groups, answers) }, groups, seen, sites);
       const control = await engine.commit(next);
       return { ok: true, errors: [], analysis, control };
     });
@@ -84,13 +75,6 @@ export function createCommands({ store, engine, checker, learner, log = NO_LOG, 
     return store.run(async (state) => {
       requireValidUserPac(state);
       const group = requireGroup(state, mask);
-      // A host of a root's domain is only a record of what the root's pages requested: forgetting it changes no route.
-      const used = state.uses?.[mask] ?? {};
-      if (!Object.hasOwn(group.hosts, host) && Object.hasOwn(used, host)) {
-        const { [host]: removed, ...kept } = used;
-        await store.commit({ ...state, uses: withUses(state.uses, mask, kept) });
-        return { ok: true, control: null };
-      }
       if (!Object.hasOwn(group.hosts, host)) throw new Error(`Host ${JSON.stringify(host)} is not in group ${JSON.stringify(mask)}`);
       const hosts = { ...group.hosts };
       delete hosts[host];
@@ -105,22 +89,15 @@ export function createCommands({ store, engine, checker, learner, log = NO_LOG, 
     return store.run(async (state) => {
       requireValidUserPac(state);
       const group = requireGroup(state, mask);
-      const kept = Object.entries(group.hosts).filter(([host]) => siteOf(host, store.psl) !== site);
-      const used = Object.entries(state.uses?.[mask] ?? {});
-      const keptUses = used.filter(([host]) => siteOf(host, store.psl) !== site);
-      if (kept.length === Object.keys(group.hosts).length && keptUses.length === used.length) throw new Error(`Site ${JSON.stringify(site)} has no host in group ${JSON.stringify(mask)}`);
-      const uses = keptUses.length === used.length ? state.uses : withUses(state.uses, mask, Object.fromEntries(keptUses));
-      if (kept.length === Object.keys(group.hosts).length) {
-        await store.commit({ ...state, uses });
-        return { ok: true, control: null };
-      }
+      const kept = Object.entries(group.hosts).filter(([host]) => siteIn(host, state.analysis.roots, store.psl) !== site);
+      if (kept.length === Object.keys(group.hosts).length) throw new Error(`Site ${JSON.stringify(site)} has no host in group ${JSON.stringify(mask)}`);
       const groups = { ...state.groups, [mask]: { rootHost: group.rootHost, hosts: Object.fromEntries(kept) } };
-      return { ok: true, control: await engine.commit(rebuild({ ...state, uses }, groups, pruneSeen(state.seen, groups))) };
+      return { ok: true, control: await engine.commit(rebuild(state, groups, pruneSeen(state.seen, groups))) };
     });
   };
 
-  // Route here: the root takes the sites of these names — hosts it holds, learned or requested of a root's domain, or root
-  // domains; every host of those sites, in any group, then goes through its proxy.
+  // Route here: the root takes the sites of these names, hosts it holds or root domains; every host of those sites, in
+  // any group, then goes through its proxy.
   const routeHere = async ({ mask, hosts }) => {
     if (!Array.isArray(hosts) || hosts.length === 0) throw new TypeError("hosts must be a non-empty array");
     for (const host of hosts) requireString(host, "host");
@@ -128,9 +105,9 @@ export function createCommands({ store, engine, checker, learner, log = NO_LOG, 
       requireValidUserPac(state);
       const group = requireGroup(state, mask);
       for (const host of hosts) {
-        if (!Object.hasOwn(group.hosts, host) && !Object.hasOwn(state.uses?.[mask] ?? {}, host) && !state.analysis.roots.includes(host)) throw new Error(`Host ${JSON.stringify(host)} is not in group ${JSON.stringify(mask)}`);
+        if (!Object.hasOwn(group.hosts, host) && !state.analysis.roots.includes(host)) throw new Error(`Host ${JSON.stringify(host)} is not in group ${JSON.stringify(mask)}`);
       }
-      const sites = routeSites(state.sites, mask, hosts, store.psl);
+      const sites = routeSites(state.sites, mask, hosts, state.analysis.roots, store.psl);
       if (sites === state.sites) return { ok: true, control: null };
       return { ok: true, control: await engine.commit(rebuild(state, state.groups, state.seen, sites)) };
     });
@@ -141,7 +118,7 @@ export function createCommands({ store, engine, checker, learner, log = NO_LOG, 
       requireValidUserPac(state);
       requireGroup(state, mask);
       const groups = { ...state.groups, [mask]: { rootHost: null, hosts: {} } };
-      return { ok: true, control: await engine.commit(rebuild({ ...state, uses: withUses(state.uses, mask, {}) }, groups, pruneSeen(state.seen, groups))) };
+      return { ok: true, control: await engine.commit(rebuild(state, groups, pruneSeen(state.seen, groups))) };
     });
   };
 
@@ -154,13 +131,12 @@ export function createCommands({ store, engine, checker, learner, log = NO_LOG, 
     buildSystemPac(userPac, read.groups, store.psl);
     // Owners the backup names win; a site it names no owner for, or a schema 1 backup, gets the route it had.
     const owners = { ...bootstrapSites(read.groups, analysis.roots, store.psl), ...(read.sites ?? {}) };
-    const { groups } = aggregateGroups(releaseSites(read.groups, owners, analysis.roots, store.psl), {}, analysis, store.psl);
-    const sites = normalizeSites(owners, groups, analysis.roots, store.psl);
+    const { groups } = aggregateGroups(read.groups, {}, analysis, store.psl);
+    const sites = normalizeSites(releaseSites(owners, groups, analysis.roots, store.psl), groups, analysis.roots, store.psl);
     const { errors, answers } = await trial(userPac, analysis, { groups, sites });
     if (errors.length > 0) return { ok: false, errors };
     return store.run(async (state) => {
-      const uses = reconcileUses(read.uses, analysis.roots);
-      const next = rebuild({ ...state, userPac, analysis, userPacErrors: null, proxies: proxiesOf(groups, answers), uses }, groups, {}, sites);
+      const next = rebuild({ ...state, userPac, analysis, userPacErrors: null, proxies: proxiesOf(groups, answers) }, groups, {}, sites);
       const control = await engine.commit(next);
       return { ok: true, errors: [], analysis, control };
     });
@@ -178,21 +154,21 @@ export function createCommands({ store, engine, checker, learner, log = NO_LOG, 
     // The roots that handed their site to this one; only a root tab asks.
     const sites = group === null ? null : sitesOfState(store.state, analysis.roots, store.psl);
     const taken = group === null ? [] : analysis.roots.filter((root) => root !== mask && Object.hasOwn(groups, root) && sites[siteOf(root, store.psl)] === mask);
-    // Every name once: a root's domain may also be among the hosts its pages requested.
-    const known = group === null ? null : new Set([...Object.keys(group.hosts), ...Object.keys(store.state.uses?.[mask] ?? {}), ...[mask, ...taken].map(maskDomain)]);
+    // Every name once: a root's domain may be a record of another root's group too.
+    const known = group === null ? null : new Set([...Object.keys(group.hosts), ...[mask, ...taken].map(maskDomain)]);
     return {
       ok: true,
       mask,
       rootHost: group?.rootHost ?? null,
-      // The root itself, its learned hosts, the hosts of root domains its pages requested and the domains of roots that
-      // handed their site to it: what the System PAC viewer lists for the group.
+      // The root itself, its learned hosts and the domains of roots that handed their site to it: what the System PAC
+      // viewer lists for the group.
       hostCount: known === null ? 0 : known.size,
       loaded: learner.loaded(tabId),
       proxied: learner.proxied(tabId),
       newHosts: learner.newHosts(tabId),
       incomplete: learner.incomplete(tabId),
       proxyError: learner.proxyError(tabId),
-      conflicts: learner.conflicts(tabId).map((item) => ({ ...item, request: item.request ?? item.host, site: siteOf(item.host, store.psl), proxy: answers[item.root] ?? null, ownerProxy: answers[item.owner] ?? null })),
+      conflicts: learner.conflicts(tabId).map((item) => ({ ...item, request: item.request ?? item.host, site: siteIn(item.host, analysis.roots, store.psl), proxy: answers[item.root] ?? null, ownerProxy: answers[item.owner] ?? null })),
     };
   };
 

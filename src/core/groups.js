@@ -25,7 +25,8 @@ export function reconcileGroups(groups, { roots, deny, bypass }) {
     const hosts = {};
     let dropped = false;
     for (const [host, firstSeen] of Object.entries(group.hosts)) {
-      if (isLearnableName(host) && rootOf(host, roots) === null && !underDeny(host, deny) && firstMatch(host, bypass) === null && !coversBypass(host, bypass)) hosts[host] = firstSeen;
+      // A root's own domain is never a record of its group; another root's domain is, like any other site.
+      if (isLearnableName(host) && rootOf(host, roots) !== mask && !underDeny(host, deny) && firstMatch(host, bypass) === null && !coversBypass(host, bypass)) hosts[host] = firstSeen;
       else dropped = true;
     }
     next[mask] = dropped ? { rootHost: group.rootHost, hosts } : group;
@@ -106,9 +107,10 @@ function byBreadth(a, b) {
 }
 
 // A candidate stays inside its site (it is at most the registrable domain), so it may cover a root's domain: the
-// route is the site's either way. It may not lie under a root, whose hosts are never learned, or a deny or bypass mask.
-function canAggregate(domain, { roots, deny, bypass }) {
-  if (rootOf(domain, roots) !== null || underDeny(domain, deny) || firstMatch(domain, bypass) !== null) return false;
+// route is the site's either way. It is a parent of hosts the group holds, so it never lies under the group's own root;
+// it may not lie under a deny or bypass mask.
+function canAggregate(domain, { deny, bypass }) {
+  if (underDeny(domain, deny) || firstMatch(domain, bypass) !== null) return false;
   return ![...deny, ...bypass].some((pattern) => covers(domain, maskDomain(pattern)));
 }
 
@@ -163,36 +165,4 @@ export function aggregateGroups(groups, seen, analysis, psl) {
     if (entries !== undefined) nextSeen = { ...nextSeen, [mask]: entries };
   }
   return { groups: nextGroups, seen: nextSeen };
-}
-
-// The hosts of root domains a root's pages requested — its own and other roots' — kept only to be shown: a root's domain
-// is never learned and its route is the root mask's, so these records never reach the System PAC or the DNR rules.
-// `uses[mask][host]` is [first requested, last seen]; a root keeps at most MAX_USES of them.
-export const MAX_USES = 1000;
-
-// `entries` are [mask, host] pairs: a new host is added with `now` twice, a known one gets `now` as its last seen.
-export function mergeUses(uses, entries, now) {
-  let next = uses;
-  for (const [mask, host] of entries) {
-    const records = next[mask] ?? {};
-    const known = Object.hasOwn(records, host) ? records[host] : null;
-    if (known === null && Object.keys(records).length >= MAX_USES) continue;
-    if (known !== null && known[1] >= now) continue;
-    if (next === uses) next = { ...uses };
-    next[mask] = { ...records, [host]: known === null ? [now, now] : [known[0], now] };
-  }
-  return next;
-}
-
-// The records a User PAC keeps: of declared roots, for hosts still in some root's domain.
-export function reconcileUses(uses, roots) {
-  let next = uses;
-  for (const [mask, records] of Object.entries(uses)) {
-    const kept = roots.includes(mask) ? Object.entries(records).filter(([host]) => rootOf(host, roots) !== null) : [];
-    if (kept.length === Object.keys(records).length) continue;
-    if (next === uses) next = { ...uses };
-    if (kept.length === 0) delete next[mask];
-    else next[mask] = Object.fromEntries(kept);
-  }
-  return next;
 }

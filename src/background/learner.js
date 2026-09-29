@@ -1,5 +1,5 @@
 import { buildSystemPac } from "../core/build.js";
-import { aggregateGroups, hostIndex, mergeGroups, mergeSeen, mergeUses } from "../core/groups.js";
+import { aggregateGroups, hostIndex, mergeGroups, mergeSeen } from "../core/groups.js";
 import { firstMatch } from "../core/glob.js";
 import { hostFromUrl, isLearnable, isLearnableName, learnedOwner, rootOf, underDeny } from "../core/hosts.js";
 import { reportEndpointHosts } from "../core/reporting.js";
@@ -35,8 +35,6 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
   const tracked = new Map();
   const pending = new Map();
   const observed = new Map();
-  // Hosts of root domains the pages of a root requested, new or first seen this session, as [mask, host] by key.
-  const used = new Map();
   const seenThisSession = new Set();
   let indexed = { groups: null, index: new Map(), own: new Map() };
   let running = false;
@@ -80,7 +78,7 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
   const routeFor = (entry, mask, state) => {
     const { answers, routes } = answeredFor(state);
     return cached(routes, keyOf(mask, entry), () => {
-      const owner = ownerOf(sitesOf(state), entry, store.psl) ?? null;
+      const owner = ownerOf(sitesOf(state), entry, state.analysis.roots, store.psl) ?? null;
       return { entry, owner, verdict: verdict(mask, owner, answers) };
     });
   };
@@ -92,7 +90,7 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
     const own = ownIndexOf(state.groups, mask);
     if (learnedOwner(host, own, store.psl) !== null) return null;
     const target = learnedOwner(host, indexOf(state.groups), store.psl) ?? host;
-    return isLearnable(target, state.analysis, own, store.psl) ? target : null;
+    return isLearnable(target, state.analysis, own, store.psl, mask) ? target : null;
   };
 
   const keyOf = (mask, host) => `${mask} ${host}`;
@@ -347,7 +345,7 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
     return accepted;
   };
 
-  const apply = async (state, learn, seen, uses = new Map()) => {
+  const apply = async (state, learn, seen) => {
     if (!learning(state)) return;
     const accepted = accept(state, learn);
     const observedNow = [...seen]
@@ -355,16 +353,15 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
       .filter(([, masks]) => masks.length > 0);
     const time = now();
     const nextSeen = observedNow.length > 0 ? mergeSeen(state.seen, observedNow, time) : state.seen;
-    const nextUses = uses.size > 0 ? mergeUses(state.uses ?? {}, uses.values(), time) : state.uses;
     if (accepted.length === 0) {
-      if (nextSeen !== state.seen || nextUses !== state.uses) await store.commit({ ...state, seen: nextSeen, uses: nextUses });
+      if (nextSeen !== state.seen) await store.commit({ ...state, seen: nextSeen });
       return;
     }
     const batch = accepted.map((source) => [source.host, source]);
     // A site nobody owns goes to the root that learned it first.
-    const sites = claimSites(sitesOf(state), accepted.map((source) => [source.host, source.mask]), store.psl);
+    const sites = claimSites(sitesOf(state), accepted.map((source) => [source.host, source.mask]), state.analysis.roots, store.psl);
     const { groups, seen: aggregatedSeen } = aggregateGroups(mergeGroups(state.groups, batch, time), nextSeen, state.analysis, store.psl);
-    const next = { ...state, groups, sites, seen: aggregatedSeen, uses: nextUses, appliedPac: buildSystemPac(state.userPac, groups, store.psl, sites) };
+    const next = { ...state, groups, sites, seen: aggregatedSeen, appliedPac: buildSystemPac(state.userPac, groups, store.psl, sites) };
     await engine.commit(next);
     if (log.on) {
       for (const { host, mask, rootHost, tabId } of accepted) log.add("learned", { host, root: mask, rootHost, tabId });
@@ -379,20 +376,13 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
     count(fresh);
   };
 
-  const commitSafely = async (learn, seen, uses) => {
+  const commitSafely = async (learn, seen) => {
     try {
-      await store.run((state) => apply(state, learn, seen, uses));
+      await store.run((state) => apply(state, learn, seen));
       return null;
     } catch (error) {
       if (learn.size <= 1) return error;
       let failure = null;
-      if (uses.size > 0) {
-        try {
-          await store.run((state) => apply(state, new Map(), new Map(), uses));
-        } catch (single) {
-          failure = single;
-        }
-      }
       for (const entry of learn) {
         try {
           await store.run((state) => apply(state, new Map([entry]), new Map()));
@@ -407,14 +397,12 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
   const flush = async () => {
     running = true;
     try {
-      while (pending.size > 0 || observed.size > 0 || used.size > 0) {
+      while (pending.size > 0 || observed.size > 0) {
         const learn = new Map(pending);
         const seen = new Map(observed);
-        const uses = new Map(used);
         pending.clear();
         observed.clear();
-        used.clear();
-        const failure = await commitSafely(learn, seen, uses);
+        const failure = await commitSafely(learn, seen);
         if (failure !== null) {
           failed = true;
           if (log.on) log.add("learnError", { message: failure instanceof Error ? failure.message : String(failure) });
@@ -439,17 +427,6 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
     if (pending.has(key) || targetOf(host, source.mask, state) === null) return false;
     pending.set(key, { ...source, request: host });
     return true;
-  };
-
-  // A host of a root's domain requested by the pages of `mask`: recorded when new, its last seen once a session. Only
-  // what a root has not recorded yet costs a write; the rest is one lookup.
-  const noteUse = (host, mask, state) => {
-    const key = keyOf(mask, host);
-    if (used.has(key)) return;
-    if (seenThisSession.has(key) && Object.hasOwn(state.uses?.[mask] ?? {}, host)) return;
-    seenThisSession.add(key);
-    used.set(key, [mask, host]);
-    schedule();
   };
 
   const observe = (host, masks) => {
@@ -525,7 +502,6 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
         const host = hostFromUrl(details.url);
         const mask = learning(state) && host !== null ? rootOf(host, state.analysis.roots) : null;
         if (mask === null) return;
-        noteUse(host, mask, state);
         // A root that handed its own site to a root on another proxy has its pages closed (core/rules.js): the page
         // never commits, so the blocked load itself tells the tab which root it is and why.
         const route = routeFor(mask, mask, state);
@@ -550,17 +526,18 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
         if (learned !== null) observe(learned, index.get(learned));
         return;
       }
-      // A root's domain is never learned: every root's pages may use it while its site goes through their proxy, and
-      // are blocked from it otherwise, the root's own pages included once it has handed its site over.
-      if (hostRoot !== null) {
-        noteUse(host, source.mask, state);
+      // A root's own domain is never learned: its pages may use it while its site goes through its proxy, and are blocked
+      // from it once the root has handed its site to a root on another proxy.
+      if (hostRoot === source.mask) {
         const route = routeFor(hostRoot, source.mask, state);
         if (route.verdict === CONFLICT) markConflict(source, route, state, host);
         else if (route.verdict !== SAME && current(source.tabId, source.navigation)) markIncomplete(source.tabId);
         return;
       }
-      // A root's own records are among all the records, so a host no root knows is new to this root too.
-      const own = learned === null ? null : learnedOwner(host, ownIndexOf(state.groups, source.mask), store.psl);
+      // Another root's domain is learned like any other site. A root's own records are among all the records, so a host
+      // no root knows is new to this root too.
+      const record = hostRoot === null ? learned : learnedOwner(host, index, store.psl);
+      const own = record === null ? null : learnedOwner(host, ownIndexOf(state.groups, source.mask), store.psl);
       if (own !== null) {
         observe(own, [source.mask]);
         const route = routeFor(own, source.mask, state);
