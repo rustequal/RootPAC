@@ -346,6 +346,21 @@ test("a root page closed by Route here shows the conflict in its tab, though the
   assert.deepEqual(learner.conflicts(tabId), []);
 });
 
+test("the log says which names aggregation took into a wider record", async () => {
+  const { store, learner, resolver, log } = await setup(userPac("PROXY fb:1", "PROXY fb:1"));
+  visit(learner, "https://www.instagram.com/");
+  load(learner, "https://www.facebook.com/a.js", { initiator: "https://www.instagram.com" });
+  await idle(learner, resolver);
+  assert.deepEqual(log.entries.filter(({ kind }) => kind === "aggregated"), []);
+  load(learner, "https://www.xx.facebook.com/b.js", { initiator: "https://www.instagram.com" });
+  await idle(learner, resolver);
+  assert.deepEqual(Object.keys(store.state.groups["instagram.com"].hosts), ["facebook.com"]);
+  const merged = log.entries.filter(({ kind }) => kind === "aggregated");
+  assert.deepEqual(merged, [{ kind: "aggregated", host: "facebook.com", hosts: ["www.facebook.com", "www.xx.facebook.com"], root: "instagram.com" }]);
+  assert.equal(entryText(merged[0]), "www.facebook.com, www.xx.facebook.com aggregated into facebook.com in instagram.com");
+  assert.equal(entryLevel(merged[0]), "info");
+});
+
 test("a removed root hands its sites on: every group keeps its hosts, and each site goes to its first learner", async () => {
   const text = userPacOf({ "facebook.com": "PROXY fb:1", "instagram.com": "PROXY ig:1", "threads.com": "PROXY fb:1" });
   const { store, browser, learner, resolver, commands } = await setup(text);

@@ -2,7 +2,7 @@
 
 export const CATEGORIES = {
   errors: new Set(["proxyFailure", "proxyError", "requestError", "incomplete", "learnError", "applyError", "startupError", "conflict", "proxyCheckError"]),
-  learning: new Set(["blocked", "reported", "learned", "skipped", "proxiesChecked"]),
+  learning: new Set(["blocked", "reported", "learned", "aggregated", "skipped", "proxiesChecked"]),
   pages: new Set(["navigation"]),
   state: new Set(["protection", "command", "log", "lifecycle"]),
 };
@@ -103,6 +103,8 @@ export function entryText(entry) {
       return `Reporting endpoint ${entry.host} of ${entry.root} queued for learning`;
     case "learned":
       return `${entry.host} learned into ${entry.root}${tab(entry)}`;
+    case "aggregated":
+      return `${entry.hosts.join(", ")} aggregated into ${entry.host} in ${entry.root}`;
     case "conflict":
       return `Proxy conflict: ${conflictText(entry)}${tab(entry)}`;
     case "proxiesChecked":

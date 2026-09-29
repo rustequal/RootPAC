@@ -154,6 +154,24 @@ function aggregateGroup(group, seen, analysis, psl) {
   return changed ? { hosts, entries } : { hosts: group.hosts, entries: seen };
 }
 
+// What aggregation did between two states of the groups, for the diagnostic log: each record of `after` that took in
+// records of `before` — a new wider record, or one that covered records learned beside it — with the names it took in.
+// A group left as it was is skipped by identity.
+export function aggregatedRecords(before, after) {
+  const merges = [];
+  for (const [mask, group] of Object.entries(after)) {
+    const previous = before[mask];
+    if (previous === undefined || previous === group) continue;
+    const gone = Object.keys(previous.hosts).filter((host) => !Object.hasOwn(group.hosts, host));
+    if (gone.length === 0) continue;
+    for (const record of Object.keys(group.hosts)) {
+      const hosts = gone.filter((host) => covers(record, host)).sort();
+      if (hosts.length > 0) merges.push({ mask, record, hosts });
+    }
+  }
+  return merges;
+}
+
 export function aggregateGroups(groups, seen, analysis, psl) {
   let nextGroups = groups;
   let nextSeen = seen;

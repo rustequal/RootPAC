@@ -1,5 +1,5 @@
 import { buildSystemPac } from "../core/build.js";
-import { aggregateGroups, hostIndex, mergeGroups, mergeSeen } from "../core/groups.js";
+import { aggregateGroups, aggregatedRecords, hostIndex, mergeGroups, mergeSeen } from "../core/groups.js";
 import { firstMatch } from "../core/glob.js";
 import { hostFromUrl, isLearnable, isLearnableName, learnedOwner, rootOf, underDeny } from "../core/hosts.js";
 import { reportEndpointHosts } from "../core/reporting.js";
@@ -360,11 +360,13 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
     const batch = accepted.map((source) => [source.host, source]);
     // A site nobody owns goes to the root that learned it first.
     const sites = claimSites(sitesOf(state), accepted.map((source) => [source.host, source.mask]), state.analysis.roots, store.psl);
-    const { groups, seen: aggregatedSeen } = aggregateGroups(mergeGroups(state.groups, batch, time), nextSeen, state.analysis, store.psl);
+    const merged = mergeGroups(state.groups, batch, time);
+    const { groups, seen: aggregatedSeen } = aggregateGroups(merged, nextSeen, state.analysis, store.psl);
     const next = { ...state, groups, sites, seen: aggregatedSeen, appliedPac: buildSystemPac(state.userPac, groups, store.psl, sites) };
     await engine.commit(next);
     if (log.on) {
       for (const { host, mask, rootHost, tabId } of accepted) log.add("learned", { host, root: mask, rootHost, tabId });
+      for (const { mask, record, hosts } of aggregatedRecords(merged, groups)) log.add("aggregated", { host: record, hosts, root: mask });
     }
     const fresh = [];
     for (const source of accepted) {
