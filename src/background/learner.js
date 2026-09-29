@@ -83,15 +83,10 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
     });
   };
 
-  // What a root learns for a host it does not know yet. Each root learns every host it needs itself, even one another
-  // root has learned; it then takes that root's record, so the groups share records instead of growing combs.
-  const targetOf = (host, mask, state) => {
-    if (!Object.hasOwn(state.groups, mask)) return null;
-    const own = ownIndexOf(state.groups, mask);
-    if (learnedOwner(host, own, store.psl) !== null) return null;
-    const target = learnedOwner(host, indexOf(state.groups), store.psl) ?? host;
-    return isLearnable(target, state.analysis, own, store.psl, mask) ? target : null;
-  };
+  // Whether a root learns a host it does not know yet. Each root learns every host it needs itself, the host as it was
+  // requested, even one another root holds a wider record of: its group aggregates its own hosts (4.8), and a record's
+  // route is its site's whichever group holds it.
+  const learns = (host, mask, state) => Object.hasOwn(state.groups, mask) && isLearnable(host, state.analysis, ownIndexOf(state.groups, mask), store.psl, mask);
 
   const keyOf = (mask, host) => `${mask} ${host}`;
 
@@ -336,14 +331,9 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
     });
   };
 
-  const accept = (state, learn) => {
-    const accepted = [];
-    for (const source of learn.values()) {
-      const host = targetOf(source.request, source.mask, state);
-      if (host !== null) accepted.push({ ...source, host });
-    }
-    return accepted;
-  };
+  // The hosts of a batch still new to their root when it is applied.
+  const accept = (state, learn) =>
+    [...learn.values()].filter((source) => learns(source.request, source.mask, state)).map((source) => ({ ...source, host: source.request }));
 
   const apply = async (state, learn, seen) => {
     if (!learning(state)) return;
@@ -370,7 +360,7 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
     }
     const fresh = [];
     for (const source of accepted) {
-      const entry = learnedOwner(source.request, indexOf(next.groups), store.psl);
+      const entry = learnedOwner(source.request, ownIndexOf(next.groups, source.mask), store.psl);
       const route = entry === null ? null : routeFor(entry, source.mask, next);
       if (route?.verdict === CONFLICT) markConflict(source, route, next, source.request);
       else fresh.push(source);
@@ -426,7 +416,7 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
 
   const enqueue = (host, source, state) => {
     const key = keyOf(source.mask, host);
-    if (pending.has(key) || targetOf(host, source.mask, state) === null) return false;
+    if (pending.has(key) || !learns(host, source.mask, state)) return false;
     pending.set(key, { ...source, request: host });
     return true;
   };
@@ -537,9 +527,8 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
         return;
       }
       // Another root's domain is learned like any other site. A root's own records are among all the records, so a host
-      // no root knows is new to this root too.
-      const record = hostRoot === null ? learned : learnedOwner(host, index, store.psl);
-      const own = record === null ? null : learnedOwner(host, ownIndexOf(state.groups, source.mask), store.psl);
+      // outside every root's domain that no group knows is new to this root too.
+      const own = hostRoot === null && learned === null ? null : learnedOwner(host, ownIndexOf(state.groups, source.mask), store.psl);
       if (own !== null) {
         observe(own, [source.mask]);
         const route = routeFor(own, source.mask, state);

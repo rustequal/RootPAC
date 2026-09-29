@@ -231,7 +231,6 @@ function fuzz(seed) {
       const extra = [];
       if (roll < 0.7) {
         const batch = [];
-        const index = hostIndex(state.groups);
         const ownIndex = (groups, mask) => new Set(Object.keys(groups[mask]?.hosts ?? {}));
         for (let i = 1 + Math.floor(random() * 4); i > 0; i--) {
           const url = random() < 0.15 ? s.pick(ODD_URLS) : `https://${random() < 0.5 ? s.pick(s.pool) : s.name(1 + Math.floor(random() * 4))}/`;
@@ -241,10 +240,9 @@ function fuzz(seed) {
           const mask = s.pick(analysis.roots);
           const rootHost = state.groups[mask]?.rootHost ?? (random() < 0.5 ? mask : `${s.pick(LABELS)}.${mask}`);
           const own = ownIndex(state.groups, mask);
-          if (!isHostName(rootHost) || learnedOwner(host, own, PSL) !== null) continue;
-          // A root learns the record that already routes the host, like the learner does.
-          const target = learnedOwner(host, index, PSL) ?? host;
-          if (!batch.some(([name, source]) => name === target && source.mask === mask) && isLearnable(target, analysis, own, PSL, mask)) batch.push([target, { mask, rootHost, host }]);
+          if (!isHostName(rootHost)) continue;
+          // A root learns the host as it was requested, like the learner does; its group aggregates its own hosts.
+          if (!batch.some(([name, source]) => name === host && source.mask === mask) && isLearnable(host, analysis, own, PSL, mask)) batch.push([host, { mask, rootHost, host }]);
         }
         if (batch.length > 0) {
           for (const [target] of batch) learnedAlone.add(target);

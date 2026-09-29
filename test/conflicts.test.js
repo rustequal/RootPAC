@@ -70,7 +70,7 @@ const idle = async (learner, resolver) => {
 };
 
 // instagram.com learns two fbcdn.net hosts (one record, fbcdn.net, and the site is instagram.com's), then a
-// facebook.com page asks for a third one and learns the same record.
+// facebook.com page asks for a third one and learns that host as it asked for it.
 async function shared(text) {
   const setupResult = await setup(text);
   const { learner, resolver } = setupResult;
@@ -95,9 +95,9 @@ const allowed = (browser, host, top, initiator = `https://www.${top}`, type = "s
 
 const route = (browser, host) => loadPac(browser.pac()).FindProxyForURL(`https://${host}/`, host);
 
-test("a host another root learned is learned again as the same record, and the site keeps its owner", async () => {
+test("a host another root holds a wider record of is learned as it was asked for, and the site keeps its owner", async () => {
   const { store, learner } = await shared(userPac("PROXY fb:1", "PROXY fb:1"));
-  assert.deepEqual(Object.keys(store.state.groups["facebook.com"].hosts), ["fbcdn.net"]);
+  assert.deepEqual(Object.keys(store.state.groups["facebook.com"].hosts), ["scontent.fbcdn.net"]);
   assert.deepEqual(Object.keys(store.state.groups["instagram.com"].hosts), ["fbcdn.net"]);
   assert.equal(store.state.sites["fbcdn.net"], "instagram.com");
   assert.equal(learner.newHosts(TAB), 1);
@@ -129,17 +129,17 @@ test("roots on different proxies: the site stays with its owner and is blocked f
   assert.equal(allowed(browser, "scontent.fbcdn.net", "facebook.com"), false);
   assert.equal(allowed(browser, "scontent.fbcdn.net", "facebook.com", null), false);
   assert.equal(allowed(browser, "scontent.fbcdn.net", "example.org", "https://www.facebook.com"), false);
-  assert.deepEqual(conflictsOf(store.state), [{ root: "facebook.com", host: "fbcdn.net" }]);
+  assert.deepEqual(conflictsOf(store.state), [{ root: "facebook.com", host: "scontent.fbcdn.net" }]);
   assert.equal(learner.newHosts(TAB), 1);
   reloadFacebook(learner);
-  assert.deepEqual(learner.conflicts(TAB), [{ host: "fbcdn.net", request: "scontent.fbcdn.net", root: "facebook.com", owner: "instagram.com" }]);
+  assert.deepEqual(learner.conflicts(TAB), [{ host: "scontent.fbcdn.net", request: "scontent.fbcdn.net", root: "facebook.com", owner: "instagram.com" }]);
   assert.equal(learner.newHosts(TAB), 0);
   const logged = log.entries.filter(({ kind }) => kind === "conflict");
-  assert.deepEqual(logged, [{ kind: "conflict", host: "fbcdn.net", request: "scontent.fbcdn.net", root: "facebook.com", owner: "instagram.com", proxy: "PROXY fb:1", ownerProxy: "PROXY ig:1", tabId: TAB }]);
+  assert.deepEqual(logged, [{ kind: "conflict", host: "scontent.fbcdn.net", request: "scontent.fbcdn.net", root: "facebook.com", owner: "instagram.com", proxy: "PROXY fb:1", ownerProxy: "PROXY ig:1", tabId: TAB }]);
   assert.equal(entryLevel(logged[0]), "error");
   assert.equal(
     entryText(logged[0]),
-    "Proxy conflict: scontent.fbcdn.net (fbcdn.net) goes through the proxy of instagram.com (PROXY ig:1), whose site it is; facebook.com uses PROXY fb:1, so it is blocked for facebook.com · tab 3",
+    "Proxy conflict: scontent.fbcdn.net goes through the proxy of instagram.com (PROXY ig:1), whose site it is; facebook.com uses PROXY fb:1, so it is blocked for facebook.com · tab 3",
   );
 });
 
@@ -147,7 +147,7 @@ test("the popup reports the conflicts of the tab with both proxies", async () =>
   const { commands, learner } = await shared(userPac("PROXY fb:1", "PROXY ig:1"));
   reloadFacebook(learner);
   const state = await commands.dispatch({ type: "getTabState", tabId: TAB });
-  assert.deepEqual(state.conflicts, [{ host: "fbcdn.net", request: "scontent.fbcdn.net", site: "fbcdn.net", root: "facebook.com", owner: "instagram.com", proxy: "PROXY fb:1", ownerProxy: "PROXY ig:1" }]);
+  assert.deepEqual(state.conflicts, [{ host: "scontent.fbcdn.net", request: "scontent.fbcdn.net", site: "fbcdn.net", root: "facebook.com", owner: "instagram.com", proxy: "PROXY fb:1", ownerProxy: "PROXY ig:1" }]);
   assert.match(conflictText(state.conflicts[0]), /blocked for facebook\.com/);
 });
 
@@ -203,7 +203,7 @@ test("the owner removing its record keeps the site while another root holds it",
   assert.equal(store.state.sites["fbcdn.net"], "instagram.com");
   assert.equal(route(browser, "scontent.fbcdn.net"), "PROXY ig:1");
   assert.equal(allowed(browser, "scontent.fbcdn.net", "facebook.com"), false);
-  assert.equal((await commands.dispatch({ type: "removeHost", mask: "facebook.com", host: "fbcdn.net" })).ok, true);
+  assert.equal((await commands.dispatch({ type: "removeHost", mask: "facebook.com", host: "scontent.fbcdn.net" })).ok, true);
   assert.equal(Object.hasOwn(store.state.sites, "fbcdn.net"), false);
 });
 
@@ -222,7 +222,7 @@ test("the viewer gets each root's proxy, the owner of its site and the hosts it 
       "facebook.com": {
         proxy: "PROXY fb:1",
         root: { site: "facebook.com", owner: "facebook.com", verdict: "same", ownerProxy: "PROXY fb:1" },
-        records: { "fbcdn.net": { site: "fbcdn.net", owner: "instagram.com", verdict: "conflict", ownerProxy: "PROXY ig:1" } },
+        records: { "scontent.fbcdn.net": { site: "fbcdn.net", owner: "instagram.com", verdict: "conflict", ownerProxy: "PROXY ig:1" } },
         taken: {},
         blocks: {},
       },
@@ -237,7 +237,7 @@ test("the viewer gets each root's proxy, the owner of its site and the hosts it 
   });
   const same = await shared(userPac("PROXY fb:1", "PROXY fb:1"));
   const { roots } = await same.commands.dispatch({ type: "getRoutes" });
-  assert.deepEqual(roots["facebook.com"].records["fbcdn.net"], { site: "fbcdn.net", owner: "instagram.com", verdict: "same", ownerProxy: "PROXY fb:1" });
+  assert.deepEqual(roots["facebook.com"].records["scontent.fbcdn.net"], { site: "fbcdn.net", owner: "instagram.com", verdict: "same", ownerProxy: "PROXY fb:1" });
   assert.deepEqual(roots["instagram.com"].blocks, {});
 });
 
