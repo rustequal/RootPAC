@@ -1,10 +1,12 @@
 // Text of diagnostic log entries; no DOM, so it is unit-tested.
 
+import { formatPslVersion } from "../../core/pslsource.js";
+
 export const CATEGORIES = {
   errors: new Set(["proxyFailure", "proxyError", "requestError", "incomplete", "learnError", "applyError", "startupError", "conflict", "proxyCheckError"]),
   learning: new Set(["blocked", "reported", "learned", "aggregated", "skipped", "proxiesChecked"]),
   pages: new Set(["navigation"]),
-  state: new Set(["protection", "command", "log", "lifecycle"]),
+  state: new Set(["protection", "command", "log", "lifecycle", "psl"]),
 };
 
 const LEVELS = {
@@ -86,6 +88,14 @@ function commandText(entry) {
   }
 }
 
+function pslText({ trigger, outcome, version, installed, message }) {
+  const by = trigger === "weekly" ? "Weekly check" : "Update";
+  if (outcome === "updated") return `${by}: Public Suffix List updated to ${formatPslVersion(version)}`;
+  if (outcome === "current") return `${by}: Public Suffix List ${formatPslVersion(installed)} is the newest`;
+  if (outcome === "conflict") return `${by}: Public Suffix List ${formatPslVersion(version)} is not installed, the saved User PAC does not pass with it`;
+  return `${by}: Public Suffix List update failed: ${message}`;
+}
+
 function lifecycleText({ event, version, previousVersion }) {
   if (event === "startup") return `Browser started, RootPAC ${version}`;
   if (event === "install") return `RootPAC ${version} installed`;
@@ -134,6 +144,8 @@ export function entryText(entry) {
       return entry.enabled ? `Diagnostic log started, RootPAC ${entry.version}` : "Diagnostic log stopped";
     case "lifecycle":
       return lifecycleText(entry);
+    case "psl":
+      return pslText(entry);
     default:
       return entry.kind;
   }
@@ -142,6 +154,7 @@ export function entryText(entry) {
 export function entryLevel(entry) {
   if (entry.kind === "protection" && !entry.armed) return "warn";
   if (entry.kind === "command" && !entry.ok) return "warn";
+  if (entry.kind === "psl" && (entry.outcome === "conflict" || entry.outcome === "error")) return "warn";
   return LEVELS[entry.kind] ?? "info";
 }
 

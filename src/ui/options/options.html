@@ -22,6 +22,15 @@
   <input id="file" type="file" accept="application/json" hidden>
   <span id="backupStatus" class="muted"></span>
 </div>
+<h2>Public Suffix List</h2>
+<div class="row psl"><span class="muted">Installed</span><span id="pslInstalled" class="mono"></span></div>
+<div class="row psl"><span class="muted">Available</span><span id="pslAvailable" class="mono"></span><button id="pslUpdate" class="small" hidden>Update</button></div>
+<div id="pslConflict"></div>
+<div class="row" style="margin-top: 6px">
+  <label class="check"><input id="pslAuto" type="checkbox"> Check and update weekly in the background</label>
+  <span id="pslAutoStatus" class="muted"></span>
+</div>
+<p class="muted">The list of public suffixes (<span class="mono">co.uk</span>, <span class="mono">github.io</span>) that tells which hosts make one site. Opening this page checks publicsuffix.org for a newer list. A newer list the saved User PAC does not pass with is not installed: the icon turns amber with <b>!</b> until the User PAC is fixed.</p>
 <h2>Diagnostics</h2>
 <div class="row">
   <label class="check"><input id="logEnabled" type="checkbox"> Record a diagnostic log</label>

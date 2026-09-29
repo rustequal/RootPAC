@@ -10,8 +10,11 @@ const GROUP = "group:";
 const SEEN = "seen:";
 const VERIFIED = "stateVerified";
 const SCALARS = ["enabled", "userPac", "analysis", "appliedPac", "userPacErrors", "proxies", "sites"];
+// The public suffix list (pslupdate.js): the downloaded list, the weekly switch, the time of the last weekly check and a
+// newer list the saved User PAC does not pass with.
+export const PSL_KEYS = Object.freeze({ list: "pslList", auto: "pslAutoUpdate", checked: "pslChecked", conflict: "pslConflict" });
 // Settings of the pages that are not part of the routing state; the store leaves them alone.
-const SETTINGS = new Set([LOG_SETTING]);
+const SETTINGS = new Set([LOG_SETTING, ...Object.values(PSL_KEYS)]);
 // uses:<mask> of 1.0.34 recorded the root hosts a root's pages requested, which are learned records now; loading drops
 // these keys.
 const retired = (key) => key.startsWith("uses:");
@@ -68,7 +71,8 @@ function isAnalysis(analysis) {
 }
 
 
-function refresh(state, psl) {
+// The routing state worked out again from the saved User PAC, with the public suffix list given.
+export function refresh(state, psl) {
   if (state.userPac === null) return { ...state, groups: {}, seen: {}, sites: null };
   const result = analyzeUserPac(state.userPac, psl);
   if (!result.ok) {
@@ -134,9 +138,14 @@ export class Store {
     return this.#state;
   }
 
-  async load(psl) {
+  // Replaces the list in use; the caller commits the state worked out with it (pslupdate.js).
+  setPsl(psl) {
     if (typeof psl?.registrableDomain !== "function" || typeof psl.isPublicSuffix !== "function") throw new TypeError("Store needs the public suffix list");
     this.#psl = psl;
+  }
+
+  async load(psl) {
+    this.setPsl(psl);
     const [items, { [VERIFIED]: verified }] = await Promise.all([this.#area.get(null), this.#session.get(VERIFIED)]);
     this.#verified = verified === true;
     if (Object.keys(items).every((key) => SETTINGS.has(key))) {

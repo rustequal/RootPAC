@@ -10,6 +10,8 @@ const OFF = Object.freeze({ icon: "off", text: "!" });
 const IDLE = Object.freeze({ icon: "idle", text: "" });
 // A proxy failure or a proxy conflict on the page; the popup says which.
 const ALERT = Object.freeze({ icon: "pending", text: "!" });
+// A newer public suffix list the saved User PAC does not pass with (background/pslupdate.js); Options says which.
+const PSL_WARNING = Object.freeze({ icon: "pending", text: "!" });
 const UNKNOWN = Symbol("unknown");
 
 export async function decodeIcon(path) {
@@ -21,7 +23,7 @@ export async function decodeIcon(path) {
   return context.getImageData(0, 0, bitmap.width, bitmap.height);
 }
 
-export function createBadge({ action, runtime, tabs, engine, store, learner, decode }) {
+export function createBadge({ action, runtime, tabs, engine, store, learner, decode, warning = () => false }) {
   const setIcon = (details) =>
     new Promise((resolve, reject) => {
       action.setIcon(details, () => {
@@ -47,11 +49,12 @@ export function createBadge({ action, runtime, tabs, engine, store, learner, dec
 
   const sharedState = () => {
     const { enabled, analysis, userPacErrors } = store.state;
-    return !enabled || analysis === null || userPacErrors !== null || !engine.armed ? OFF : IDLE;
+    if (!enabled || analysis === null || userPacErrors !== null || !engine.armed) return OFF;
+    return warning() ? PSL_WARNING : IDLE;
   };
 
   const stateOf = (tabId, common) => {
-    if (common === OFF) return OFF;
+    if (common === OFF || common === PSL_WARNING) return common;
     const host = learner.tabHost(tabId);
     if (host === null || rootOf(host, store.state.analysis.roots) === null) return IDLE;
     if (learner.conflicts(tabId).length > 0 || learner.proxyError(tabId) !== null) return ALERT;

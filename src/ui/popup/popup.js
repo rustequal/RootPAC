@@ -1,4 +1,4 @@
-import { CLOSED_TEXT, INCOGNITO_TEXT, element, formatTime, incognitoAllowed, onStored, proxyErrorText, readLocal, send } from "../shared/rpc.js";
+import { CLOSED_TEXT, INCOGNITO_TEXT, element, formatTime, incognitoAllowed, onStored, proxyErrorText, pslConflictText, readLocal, send } from "../shared/rpc.js";
 import { header } from "../shared/logo.js";
 
 // A render builds the card and the messages off the page and puts them in at once, and only when they changed: a popup
@@ -128,7 +128,7 @@ function showState(state, tabId) {
 
 async function render() {
   const [stored, session, incognito, tabId] = await Promise.all([
-    readLocal(["enabled", "userPac", "appliedPac", "userPacErrors"]),
+    readLocal(["enabled", "userPac", "appliedPac", "userPacErrors", "pslConflict"]),
     chrome.storage.session.get(["lastLearnError", "armed", "startupError"]),
     incognitoAllowed(),
     activeTabId(),
@@ -146,6 +146,7 @@ async function render() {
   if (stored.userPacErrors !== undefined) {
     banner("Saved user PAC no longer passes validation — protection continues with the last applied configuration. Fix it in Options");
   }
+  if (stored.pslConflict !== undefined) banner(`${pslConflictText(stored.pslConflict)}. Fix it in Options`);
   if (session.startupError !== undefined) banner(`RootPAC failed to start: ${session.startupError}`, "banner error");
   const learnError = session.lastLearnError;
   if (learnError !== undefined) banner(`${formatTime(learnError.time)} — Learning failed: ${learnError.message}`, "banner error");
@@ -205,7 +206,7 @@ document.getElementById("log").addEventListener("click", () => {
 });
 
 // What the popup shows: the settings, the groups (the root's known hosts) and owners, the worker's state and this tab.
-const SHOWN = new Set(["enabled", "userPac", "appliedPac", "userPacErrors", "analysis", "sites", "proxies", "lastLearnError", "armed", "startupError"]);
+const SHOWN = new Set(["enabled", "userPac", "appliedPac", "userPacErrors", "analysis", "sites", "proxies", "lastLearnError", "armed", "startupError", "pslConflict"]);
 
 onStored((changes) => {
   const tabKey = shownTab === null ? null : `tab:${shownTab}`;

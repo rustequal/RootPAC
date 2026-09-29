@@ -53,14 +53,14 @@ const fakeLearner = () => ({
   },
 });
 
-async function setup(items = {}, { checker = vmChecker(), session = new FakeArea(), learner = fakeLearner() } = {}) {
+async function setup(items = {}, { checker = vmChecker(), session = new FakeArea(), learner = fakeLearner(), psl = null } = {}) {
   const area = new FakeArea(items);
   const store = new Store(area, new FakeArea());
   await store.load(PSL);
   area.calls.length = 0;
   const browser = new FakeBrowser();
   const engine = createEngine({ store, proxy: createProxy(browser), dnr: createDnr(browser.dnr), session: new FakeArea() });
-  return { area, store, browser, checker, session, learner, commands: createCommands({ store, engine, checker, session, learner }) };
+  return { area, store, browser, checker, session, learner, commands: createCommands({ store, engine, checker, session, learner, psl }) };
 }
 
 const TRAINED = {
@@ -387,4 +387,28 @@ test("getTabState works before a User PAC is saved", async () => {
   const { commands, learner } = await setup();
   learner.tabs.set(1, "www.a.com");
   assert.deepEqual(await commands.dispatch({ type: "getTabState", tabId: 1 }), { ok: true, mask: null, rootHost: null, hostCount: 0, loaded: 0, proxied: 0, newHosts: 0, incomplete: false, proxyError: null, conflicts: [] });
+});
+
+test("public suffix list commands go to the updater, and a saved User PAC retries a list it held back", async () => {
+  const calls = [];
+  const psl = {
+    conflict: null,
+    status: () => ({ installed: { version: "v1", commit: null, source: "bundled" }, conflict: psl.conflict }),
+    check: async () => ({ ok: true, available: { version: "v2", commit: null }, newer: true }),
+    update: async () => {
+      calls.push("update");
+      return { ok: true, outcome: "updated" };
+    },
+  };
+  const { commands } = await setup({}, { psl });
+  assert.deepEqual(await commands.dispatch({ type: "getPsl" }), { ok: true, installed: { version: "v1", commit: null, source: "bundled" }, conflict: null });
+  assert.equal((await commands.dispatch({ type: "checkPsl" })).newer, true);
+  assert.equal((await commands.dispatch({ type: "updatePsl" })).outcome, "updated");
+  await commands.dispatch({ type: "saveUserPac", text: fixture("user.pac") });
+  assert.deepEqual(calls, ["update"]);
+  psl.conflict = { version: "v2", commit: null, errors: [] };
+  await commands.dispatch({ type: "saveUserPac", text: fixture("user.pac") });
+  assert.deepEqual(calls, ["update", "update"]);
+  const bare = await setup();
+  assert.deepEqual(await bare.commands.dispatch({ type: "getPsl" }), { ok: false, error: "Public suffix list updates are unavailable" });
 });

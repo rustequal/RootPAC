@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createBadge } from "../src/background/badge.js";
 
-function fakes({ state = STATE, tabs: hosts = { 1: "www.a.com" }, newHosts = {}, load = { 1: 2 }, busy = [], waiting = {}, broken = [], failed = [], clashes = {}, armed = true, failIcon = 0 } = {}) {
+function fakes({ state = STATE, tabs: hosts = { 1: "www.a.com" }, newHosts = {}, load = { 1: 2 }, busy = [], waiting = {}, broken = [], failed = [], clashes = {}, armed = true, failIcon = 0, pslConflict = false } = {}) {
   const calls = [];
   const decoded = [];
   const runtime = { lastError: undefined };
@@ -36,6 +36,7 @@ function fakes({ state = STATE, tabs: hosts = { 1: "www.a.com" }, newHosts = {},
       proxyError: (tabId) => (failed.includes(tabId) ? { error: "net::ERR_PROXY_CONNECTION_FAILED", count: 1 } : null),
       conflicts: (tabId) => clashes[tabId] ?? [],
     },
+    warning: () => pslConflict,
     decode: async (path) => {
       decoded.push(path);
       return path.slice("/icons/".length, -".png".length);
@@ -205,4 +206,13 @@ test("an unchanged tab is not written again and a closed tab is forgotten", asyn
   hosts[1] = "www.a.com";
   await badge.refresh();
   assert.deepEqual(calls, [["icon", 1, "active-16"], ["text", 1, "2"]]);
+});
+
+test("a newer public suffix list the User PAC does not pass with turns every tab amber with an exclamation mark", async () => {
+  const { badge, calls } = fakes({ pslConflict: true, tabs: { 1: "www.a.com", 2: "other.org" } });
+  await badge.refresh();
+  assert.deepEqual(calls, [["icon", undefined, "pending-16"], ["text", undefined, "!"]]);
+  const off = fakes({ pslConflict: true, armed: false });
+  await off.badge.refresh();
+  assert.deepEqual(off.calls.slice(0, 2), [["icon", undefined, "off-16"], ["text", undefined, "!"]]);
 });

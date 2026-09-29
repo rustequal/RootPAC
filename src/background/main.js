@@ -1,4 +1,3 @@
-import { parsePublicSuffixList } from "../core/psl.js";
 import { createBadge, decodeIcon } from "./badge.js";
 import { createChecker } from "./check.js";
 import { createDnr } from "./dnr.js";
@@ -8,8 +7,9 @@ import { createLog, LOG_CHANNEL, LOG_SETTING } from "./log.js";
 import { createLogDb } from "./logdb.js";
 import { createCommands } from "./messages.js";
 import { createProxy } from "./proxy.js";
+import { PSL_ALARM, createPslUpdater } from "./pslupdate.js";
 import { createResolver } from "./resolve.js";
-import { Store } from "./store.js";
+import { PSL_KEYS, Store } from "./store.js";
 
 const ignore = () => undefined;
 
@@ -32,6 +32,15 @@ const engine = createEngine({
   session: chrome.storage.session,
   log,
 });
+const psl = createPslUpdater({
+  store,
+  engine,
+  area: chrome.storage.local,
+  alarms: chrome.alarms,
+  fetch: (...args) => fetch(...args),
+  bundledUrl: chrome.runtime.getURL("vendor/public_suffix_list.dat"),
+  log,
+});
 const learner = createLearner({ store, engine, session: chrome.storage.session, tabs: chrome.tabs, now: Date.now, log });
 const badge = createBadge({
   action: chrome.action,
@@ -40,6 +49,7 @@ const badge = createBadge({
   engine,
   store,
   learner,
+  warning: () => psl.conflict !== null,
   decode: decodeIcon,
 });
 
@@ -49,20 +59,17 @@ learner.onTabChange((tabId) => {
 
 const checker = createChecker({ offscreen: chrome.offscreen, runtime: chrome.runtime });
 const resolver = createResolver({ store, engine, checker, log });
-const commands = createCommands({ store, engine, checker, learner, log });
+const commands = createCommands({ store, engine, checker, learner, psl, log });
 const ready = logSetting
   .catch(ignore)
-  .then(() => fetch(chrome.runtime.getURL("vendor/public_suffix_list.dat")))
-  .then((response) => {
-    if (!response.ok) throw new Error(`Public suffix list is unavailable: ${response.status}`);
-    return response.text();
-  })
-  .then((text) => store.load(parsePublicSuffixList(text)))
+  .then(() => psl.select())
+  .then((list) => store.load(list))
   .then(() => learner.restore())
   .then(() => engine.check());
 
 ready.then(() => badge.start()).catch(ignore);
 ready.then(() => resolver.schedule()).catch(ignore);
+ready.then(() => psl.schedule()).catch(ignore);
 
 ready.then(
   () => chrome.storage.session.remove(["startupError"]),
@@ -131,13 +138,14 @@ chrome.tabs.onRemoved.addListener(whenReady(learner.onRemoved));
 
 const badgeKeys = (changes) =>
   Object.keys(changes).some(
-    (key) => key.startsWith("group:") || ["enabled", "analysis", "userPacErrors", "armed"].includes(key),
+    (key) => key.startsWith("group:") || ["enabled", "analysis", "userPacErrors", "armed", PSL_KEYS.conflict].includes(key),
   );
 
 chrome.storage.onChanged.addListener(
   whenReady((changes, area) => {
     // A root gets its rootHost with its first learned host; its proxy is checked then.
     if (area === "local" && Object.keys(changes).some((key) => key.startsWith("group:") || key === "enabled")) resolver.schedule();
+    if (area === "local" && Object.hasOwn(changes, PSL_KEYS.auto)) psl.schedule().catch(ignore);
     if (badgeKeys(changes)) return badge.refresh();
   }),
 );
@@ -152,6 +160,13 @@ for (const setting of [chrome.proxy.settings, chrome.privacy.network.networkPred
 }
 
 chrome.proxy.onProxyError.addListener(whenReady(learner.onProxyError));
+
+// The weekly public suffix list check: quiet, only the log and a list the User PAC does not pass with show it.
+chrome.alarms.onAlarm.addListener(
+  whenReady(async ({ name }) => {
+    if (name === PSL_ALARM) await psl.update({ weekly: true });
+  }),
+);
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (sender.id !== chrome.runtime.id) return false;

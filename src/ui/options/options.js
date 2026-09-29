@@ -1,4 +1,5 @@
-import { download, element, onStored, readLocal, send } from "../shared/rpc.js";
+import { formatPslVersion } from "../../core/pslsource.js";
+import { download, element, onStored, pslConflictText, readLocal, send } from "../shared/rpc.js";
 import { header } from "../shared/logo.js";
 
 document.getElementById("head").replaceWith(header("User PAC"));
@@ -12,6 +13,12 @@ const backupStatus = document.getElementById("backupStatus");
 const file = document.getElementById("file");
 const logEnabled = document.getElementById("logEnabled");
 const logStatus = document.getElementById("logStatus");
+const pslInstalled = document.getElementById("pslInstalled");
+const pslAvailable = document.getElementById("pslAvailable");
+const pslUpdate = document.getElementById("pslUpdate");
+const pslConflict = document.getElementById("pslConflict");
+const pslAuto = document.getElementById("pslAuto");
+const pslAutoStatus = document.getElementById("pslAutoStatus");
 
 let saved = "";
 let checking = false;
@@ -183,11 +190,91 @@ logEnabled.addEventListener("change", () => {
   });
 });
 
+// Public Suffix List: what is installed, what publicsuffix.org has (checked once, when the page opens, and again after
+// Update), and the weekly switch. The version of a list is the UTC time it was built.
+const pslText = ({ version, commit }) => `${formatPslVersion(version)}${commit ? ` · ${commit.slice(0, 7)}` : ""}`;
+
+function setAvailable(text, className = "", update = false) {
+  pslAvailable.textContent = text;
+  pslAvailable.className = `mono ${className}`.trim();
+  pslUpdate.hidden = !update;
+}
+
+function showInstalled(installed) {
+  if (installed === null || installed === undefined) return;
+  pslInstalled.textContent = `${pslText(installed)} · ${installed.source === "downloaded" ? "downloaded" : "bundled with RootPAC"}`;
+}
+
+function showPslConflict(conflict) {
+  if (conflict === undefined || conflict === null) {
+    pslConflict.replaceChildren();
+    return;
+  }
+  const list = element("ul", "result");
+  for (const { line, column, message } of conflict.errors ?? []) list.append(element("li", "error", line === null ? message : `${line}:${column} ${message}`));
+  pslConflict.replaceChildren(element("p", "error", `${pslConflictText(conflict)}. Fix the User PAC above, and the list is installed when it is saved.`), list);
+}
+
+async function checkPsl() {
+  setAvailable("Checking publicsuffix.org…", "muted");
+  const response = await send({ type: "checkPsl" }).catch((error) => ({ ok: false, error: error.message }));
+  showInstalled(response.installed);
+  if (!response.ok) {
+    setAvailable(`Cannot check: ${response.error}`, "error");
+    return;
+  }
+  if (response.newer) setAvailable(`${pslText(response.available)} · newer`, "", true);
+  else if (response.available.version === response.installed.version) setAvailable(`${pslText(response.available)} · up to date`, "ok");
+  else setAvailable(`${pslText(response.available)} · the installed list is newer`, "muted");
+}
+
+pslUpdate.addEventListener("click", async () => {
+  pslUpdate.disabled = true;
+  setAvailable("Updating…", "muted", true);
+  try {
+    const response = await send({ type: "updatePsl" }).catch((error) => ({ ok: false, error: error.message }));
+    showInstalled(response.installed);
+    if (response.outcome === "conflict") {
+      setAvailable(`${pslText(response.conflict)} · not installed, see below`, "error");
+      return;
+    }
+    if (!response.ok) {
+      setAvailable(`Update failed: ${response.error}`, "error", true);
+      return;
+    }
+    await checkPsl();
+  } finally {
+    pslUpdate.disabled = false;
+  }
+});
+
+async function loadPsl() {
+  const [{ pslAutoUpdate, pslConflict: conflict }, status] = await Promise.all([
+    readLocal(["pslAutoUpdate", "pslConflict"]),
+    send({ type: "getPsl" }).catch(() => null),
+  ]);
+  pslAuto.checked = pslAutoUpdate !== false;
+  showPslConflict(conflict);
+  if (status?.ok) showInstalled(status.installed);
+}
+
+pslAuto.addEventListener("change", () => {
+  pslAutoStatus.textContent = "";
+  chrome.storage.local.set({ pslAutoUpdate: pslAuto.checked }).catch((error) => {
+    pslAutoStatus.textContent = error.message;
+    pslAutoStatus.className = "error";
+    loadPsl();
+  });
+});
+
 onStored((changes, area) => {
   if (area === "local" && ("userPac" in changes || "userPacErrors" in changes || "analysis" in changes)) load(false);
   if (area === "local" && "logEnabled" in changes) loadLogSetting();
+  if (area === "local" && ("pslList" in changes || "pslConflict" in changes || "pslAutoUpdate" in changes)) loadPsl();
 });
 
 loadLogSetting();
+
+loadPsl().then(checkPsl);
 
 load(true);

@@ -22,7 +22,7 @@ function requireValidUserPac(state) {
 }
 
 
-export function createCommands({ store, engine, checker, learner, log = NO_LOG, now = Date.now }) {
+export function createCommands({ store, engine, checker, learner, psl = null, log = NO_LOG, now = Date.now }) {
   // The groups, their seen times and the site owners for a User PAC, from the state it replaces.
   const normalize = (state, analysis) => {
     const adopted = adoptLegacyGroups(state.groups, state.seen, analysis.roots);
@@ -174,7 +174,16 @@ export function createCommands({ store, engine, checker, learner, log = NO_LOG, 
 
   const getRoutes = async () => ({ ok: true, roots: sharedRoutes(store.state, store.psl) });
 
-  const handlers = { saveUserPac, setEnabled, removeHost, removeSite, routeHere, clearGroup, getTabState, getRoutes, exportState, importState, cancelCheck };
+  // The public suffix list (background/pslupdate.js): what is installed, what publicsuffix.org has, and installing it.
+  const requirePsl = () => {
+    if (psl === null) throw new Error("Public suffix list updates are unavailable");
+    return psl;
+  };
+  const getPsl = async () => ({ ok: true, ...requirePsl().status() });
+  const checkPsl = async () => requirePsl().check();
+  const updatePsl = async () => requirePsl().update();
+
+  const handlers = { saveUserPac, setEnabled, removeHost, removeSite, routeHere, clearGroup, getTabState, getRoutes, exportState, importState, cancelCheck, getPsl, checkPsl, updatePsl };
 
   // What a command changed, for the diagnostic log; read-only commands are not logged.
   const userPac = (message, response) => (response.ok ? { roots: response.analysis.roots.length } : { problems: response.errors?.length ?? 0, error: response.error });
@@ -203,6 +212,8 @@ export function createCommands({ store, engine, checker, learner, log = NO_LOG, 
       if (handler === null) return { ok: false, error: `Unknown command ${JSON.stringify(type)}` };
       const response = await run(handler, message);
       if (log.on && Object.hasOwn(describe, type)) log.add("command", { command: type, ok: response.ok, ...describe[type](message, response) });
+      // A newer list held back by the User PAC comes in once a User PAC that passes with it is saved.
+      if (response.ok && (type === "saveUserPac" || type === "importState") && psl?.conflict) psl.update().catch(() => undefined);
       return response;
     },
   };

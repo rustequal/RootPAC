@@ -167,3 +167,13 @@ test("a root page is logged when it commits, even without a main_frame request",
   ]);
   assert.equal(entryText(entries()[0]), "Root page www.instagram.com [instagram.com] · typed · tab 7");
 });
+
+test("public suffix list checks read as what happened to the list", () => {
+  const entry = (fields) => ({ time: 1, kind: "psl", ...fields });
+  assert.equal(entryText(entry({ trigger: "weekly", outcome: "updated", version: "2026-09-28_07-12-00_UTC", installed: "2026-09-28_07-12-00_UTC" })), "Weekly check: Public Suffix List updated to 2026-09-28 07:12:00 UTC");
+  assert.equal(entryText(entry({ trigger: "manual", outcome: "current", version: null, installed: "2026-09-21_18-50-07_UTC" })), "Update: Public Suffix List 2026-09-21 18:50:07 UTC is the newest");
+  assert.equal(entryText(entry({ trigger: "weekly", outcome: "error", message: "Cannot reach publicsuffix.org: Failed to fetch" })), "Weekly check: Public Suffix List update failed: Cannot reach publicsuffix.org: Failed to fetch");
+  assert.equal(entryText(entry({ trigger: "weekly", outcome: "conflict", version: "2026-09-28_07-12-00_UTC" })), "Weekly check: Public Suffix List 2026-09-28 07:12:00 UTC is not installed, the saved User PAC does not pass with it");
+  assert.equal(entryLevel(entry({ outcome: "conflict" })), "warn");
+  assert.equal(entryLevel(entry({ outcome: "updated" })), "info");
+});

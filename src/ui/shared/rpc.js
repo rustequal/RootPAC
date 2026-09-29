@@ -1,4 +1,5 @@
 import { userPacLine } from "../../core/pacline.js";
+import { formatPslVersion } from "../../core/pslsource.js";
 
 export async function send(message) {
   const result = await chrome.runtime.sendMessage(message);
@@ -22,6 +23,11 @@ export function onStored(handler) {
 
 export const CLOSED_TEXT = "Proxy settings are not under RootPAC control — root sites are blocked until it gets them back";
 export const INCOGNITO_TEXT = "Not allowed in Incognito — root sites opened in Incognito windows are not protected. Allow it in chrome://extensions";
+
+// A newer public suffix list the saved User PAC does not pass with (background/pslupdate.js).
+export function pslConflictText({ version }) {
+  return `Public Suffix List ${formatPslVersion(version)} is not installed: the saved User PAC does not pass with it`;
+}
 
 export async function incognitoAllowed() {
   return chrome.extension.isAllowedIncognitoAccess();

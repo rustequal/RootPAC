@@ -90,6 +90,14 @@ button.primary {
   color: var(--accent);
 }
 
+.row.psl {
+  min-height: 30px;
+}
+
+.row.psl > .muted:first-child {
+  min-width: 80px;
+}
+
 button.small {
   padding: 3px 9px;
   font-size: 13px;
