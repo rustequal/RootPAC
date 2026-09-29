@@ -1,4 +1,4 @@
-import { formatPslVersion } from "../../core/pslsource.js";
+import { formatPslVersion, isNewerPsl } from "../../core/pslsource.js";
 import { download, element, onStored, pslConflictText, readLocal, send } from "../shared/rpc.js";
 import { header } from "../shared/logo.js";
 
@@ -191,8 +191,11 @@ logEnabled.addEventListener("change", () => {
 });
 
 // Public Suffix List: what is installed, what publicsuffix.org has (checked once, when the page opens, and again after
-// Update), and the weekly switch. The version of a list is the UTC time it was built.
+// Update), and the weekly switch. The version of a list is the UTC time it was built. The last check is kept, so a list
+// installed elsewhere (another Options page, the weekly alarm) is compared with it again without going to the network.
 const pslText = ({ version, commit }) => `${formatPslVersion(version)}${commit ? ` · ${commit.slice(0, 7)}` : ""}`;
+
+const psl = { installed: null, conflict: null, available: null, busy: false };
 
 function setAvailable(text, className = "", update = false) {
   pslAvailable.textContent = text;
@@ -200,9 +203,26 @@ function setAvailable(text, className = "", update = false) {
   pslUpdate.hidden = !update;
 }
 
-function showInstalled(installed) {
+// The result of the last check against what is installed now; nothing while a check or an update is running.
+function showAvailable() {
+  const { installed, conflict, available, busy } = psl;
+  if (busy || installed === null || available === null) return;
+  if (!isNewerPsl(available.version, installed.version)) {
+    if (available.version === installed.version) setAvailable(`${pslText(available)} · up to date`, "ok");
+    else setAvailable(`${pslText(available)} · the installed list is newer`, "muted");
+  } else if (conflict?.version === available.version) {
+    setAvailable(`${pslText(available)} · not installed, see below`, "error");
+  } else {
+    setAvailable(`${pslText(available)} · newer`, "", true);
+  }
+}
+
+function showInstalled(installed, conflict) {
   if (installed === null || installed === undefined) return;
+  psl.installed = installed;
+  if (conflict !== undefined) psl.conflict = conflict;
   pslInstalled.textContent = `${pslText(installed)} · ${installed.source === "downloaded" ? "downloaded" : "bundled with RootPAC"}`;
+  showAvailable();
 }
 
 function showPslConflict(conflict) {
@@ -216,34 +236,33 @@ function showPslConflict(conflict) {
 }
 
 async function checkPsl() {
+  psl.busy = true;
   setAvailable("Checking publicsuffix.org…", "muted");
   const response = await send({ type: "checkPsl" }).catch((error) => ({ ok: false, error: error.message }));
-  showInstalled(response.installed);
-  if (!response.ok) {
-    setAvailable(`Cannot check: ${response.error}`, "error");
-    return;
-  }
-  if (response.newer) setAvailable(`${pslText(response.available)} · newer`, "", true);
-  else if (response.available.version === response.installed.version) setAvailable(`${pslText(response.available)} · up to date`, "ok");
-  else setAvailable(`${pslText(response.available)} · the installed list is newer`, "muted");
+  psl.busy = false;
+  psl.available = response.ok ? response.available : null;
+  if (!response.ok) setAvailable(`Cannot check: ${response.error}`, "error");
+  showInstalled(response.installed, response.conflict);
 }
 
 pslUpdate.addEventListener("click", async () => {
   pslUpdate.disabled = true;
+  psl.busy = true;
   setAvailable("Updating…", "muted", true);
   try {
     const response = await send({ type: "updatePsl" }).catch((error) => ({ ok: false, error: error.message }));
-    showInstalled(response.installed);
-    if (response.outcome === "conflict") {
-      setAvailable(`${pslText(response.conflict)} · not installed, see below`, "error");
-      return;
+    if (response.ok || response.outcome === "conflict") {
+      psl.busy = false;
+      showInstalled(response.installed, response.conflict);
     }
+    if (response.outcome === "conflict") return;
     if (!response.ok) {
       setAvailable(`Update failed: ${response.error}`, "error", true);
       return;
     }
     await checkPsl();
   } finally {
+    psl.busy = false;
     pslUpdate.disabled = false;
   }
 });
@@ -255,7 +274,7 @@ async function loadPsl() {
   ]);
   pslAuto.checked = pslAutoUpdate !== false;
   showPslConflict(conflict);
-  if (status?.ok) showInstalled(status.installed);
+  if (status?.ok) showInstalled(status.installed, status.conflict);
 }
 
 pslAuto.addEventListener("change", () => {
