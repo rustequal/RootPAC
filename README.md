@@ -115,6 +115,7 @@ Newest first. The TZ describes only the current version; this section is the rec
 
 | Version | Changes |
 | --- | --- |
+| 1.0.29 | The `root site` label is back on the first row of a group. Audit of 1.0.25–1.0.28: the viewer builds the site list of a group once per render instead of three times; `getTabState` looks up handed roots only for a root tab; the owner's conflict tooltip fits a root domain. |
 | 1.0.28 | System PAC viewer: no `root site` label, a root's domain is a site of its group like any learned one. A root whose site another root routes is listed in that root's group too, with `own proxy` and the roots it is blocked for (`getRoutes` gives `taken`), and counts in its sites and hosts and in the popup's known hosts. |
 | 1.0.27 | System PAC viewer: button text never wraps, and the action column centres **Remove site** and **Remove** on one axis. |
 | 1.0.26 | System PAC viewer: the button that removes a whole site reads **Remove site**, the one for a single host stays **Remove**; only **Clear group** asks for confirmation. |

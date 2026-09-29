@@ -24,7 +24,7 @@ function routeCell(mask, { site, owner, verdict, ownerProxy }, blocked = [], rou
   };
   if (owner === mask && blocked.length > 0) {
     line("warn", "own proxy", `blocked for ${blocked.join(", ")}`);
-    status.title = `A proxy conflict: ${blocked.join(", ")} learned hosts of ${site} too, but the site goes through this root's proxy. Route here in their group hands it over.`;
+    status.title = `A proxy conflict: ${blocked.join(", ")} need ${site} too, but the site goes through this root's proxy. Route here in their group hands it over.`;
   } else if (owner === mask) {
     line("muted", "own proxy");
   } else if (verdict === "same") {
@@ -73,13 +73,9 @@ function sitesOf(mask, hosts, route) {
     return sites.get(record.site);
   };
   for (const host of Object.keys(hosts).sort()) siteFor(route?.records[host] ?? { site: host, owner: mask, verdict: "same", ownerProxy: null }).hosts.push(host);
-  for (const [root, record] of Object.entries(route?.taken ?? {}).sort()) siteFor(record).roots.push(root);
+  for (const root of Object.keys(route?.taken ?? {}).sort()) siteFor(route.taken[root]).roots.push(root);
   const others = [...sites.keys()].filter((site) => site !== rootRoute.site).sort();
   return [rootRoute.site, ...others].map((site) => [site, sites.get(site)]);
-}
-
-function blockedCount(mask, hosts, route) {
-  return sitesOf(mask, hosts, route).filter(([, { route: site }]) => site.verdict === "conflict").length;
 }
 
 function times(list, values, pick) {
@@ -89,16 +85,18 @@ function times(list, values, pick) {
 
 // A row per site with its route, Route here and Remove for the whole site, and under it a row per root domain and per
 // learned host of the site, unless the site is a single name of its own.
-function siteRows(mask, hosts, seen, needle, route) {
+function siteRows(mask, sites, hosts, seen, needle, route) {
   const table = element("table", "hosts");
   const head = element("tr");
   for (const label of ["Site and hosts", "Route", "Learned", "Last seen", ""]) head.append(element("th", undefined, label));
   table.append(head);
-  for (const [site, { route: siteRoute, hosts: list, roots, own }] of sitesOf(mask, hosts, route)) {
+  for (const [site, { route: siteRoute, hosts: list, roots, own }] of sites) {
     if (needle !== "" && ![site, ...roots, ...list].some((name) => name.includes(needle))) continue;
     const row = element("tr", "site");
     const target = own ? mask : (list[0] ?? roots[0]);
-    row.append(element("td", "host", site), routeCell(mask, siteRoute, route?.blocks[site], (button) => run(button, { type: "routeHere", mask, hosts: [target] }), own));
+    const name = element("td", "host", site);
+    if (own) name.append(element("div", "tag", "root site"));
+    row.append(name, routeCell(mask, siteRoute, route?.blocks[site], (button) => run(button, { type: "routeHere", mask, hosts: [target] }), own));
     row.append(element("td", "muted", times(list, hosts, Math.min)), element("td", "muted", times(list, seen, Math.max)));
     const actions = element("td", "actions");
     if (list.length > 0) {
@@ -120,7 +118,7 @@ function siteRows(mask, hosts, seen, needle, route) {
     const names = [...roots, ...list];
     if (names.length === 1 && names[0] === site) continue;
     // A root's domain is never learned: it has no times and cannot be removed.
-    for (const root of roots) sub(root, "—", "—");
+    for (const root of roots) sub(own && root === mask ? `${root} · root` : root, "—", "—");
     for (const host of list) {
       const remove = element("button", "small", "Remove");
       remove.title = `Remove ${host} from ${mask}`;
@@ -152,7 +150,7 @@ function renderGroups() {
     const sites = sitesOf(mask, group.hosts, route);
     const hostCount = sites.reduce((sum, [, site]) => sum + site.hosts.length + site.roots.length, 0);
     const info = element("span", "muted grow", `${route?.proxy ?? "proxy not checked yet"} · ${sites.length} site${sites.length === 1 ? "" : "s"}, ${hostCount} host${hostCount === 1 ? "" : "s"}`);
-    const blocked = blockedCount(mask, group.hosts, route);
+    const blocked = sites.filter(([, site]) => site.route.verdict === "conflict").length;
     if (blocked > 0) info.append(element("span", "error", ` · ${blocked} blocked`));
     summary.append(info);
     const clear = element("button", "small", "Clear group");
@@ -174,9 +172,9 @@ function renderGroups() {
         else open.delete(mask);
       }
       if (!box.open) return;
-      box.replaceChildren(summary, siteRows(mask, group.hosts, state.seen.get(mask) ?? {}, needle, route));
+      box.replaceChildren(summary, siteRows(mask, sites, group.hosts, state.seen.get(mask) ?? {}, needle, route));
     });
-    if (box.open) box.append(siteRows(mask, group.hosts, state.seen.get(mask) ?? {}, needle, route));
+    if (box.open) box.append(siteRows(mask, sites, group.hosts, state.seen.get(mask) ?? {}, needle, route));
     boxes.push(box);
   }
   groupsBox.replaceChildren(...(boxes.length === 0 ? [element("p", "muted", "No groups")] : boxes));

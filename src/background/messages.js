@@ -147,18 +147,20 @@ export function createCommands({ store, engine, checker, learner, log = NO_LOG, 
   const getTabState = async ({ tabId }) => {
     if (!Number.isSafeInteger(tabId)) throw new TypeError("tabId must be an integer");
     const { analysis, groups } = store.state;
-    const sites = analysis === null ? {} : sitesOfState(store.state, analysis.roots, store.psl);
     const host = learner.tabHost(tabId);
     const mask = analysis === null || host === null ? null : rootOf(host, analysis.roots);
     const group = mask === null ? null : groups[mask];
     const answers = answersOf(store.state);
+    // The roots that handed their site to this one; only a root tab asks.
+    const sites = group === null ? null : sitesOfState(store.state, analysis.roots, store.psl);
+    const taken = group === null ? 0 : analysis.roots.filter((root) => root !== mask && Object.hasOwn(groups, root) && sites[siteOf(root, store.psl)] === mask).length;
     return {
       ok: true,
       mask,
       rootHost: group?.rootHost ?? null,
       // The root itself, its learned hosts and the domains of roots that handed their site to it: what the System PAC
       // viewer lists for the group.
-      hostCount: group === null ? 0 : Object.keys(group.hosts).length + 1 + analysis.roots.filter((root) => root !== mask && Object.hasOwn(groups, root) && sites[siteOf(root, store.psl)] === mask).length,
+      hostCount: group === null ? 0 : Object.keys(group.hosts).length + 1 + taken,
       loaded: learner.loaded(tabId),
       proxied: learner.proxied(tabId),
       newHosts: learner.newHosts(tabId),
