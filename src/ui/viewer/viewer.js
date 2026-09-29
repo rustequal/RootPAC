@@ -105,7 +105,7 @@ function siteRows(mask, hosts, seen, needle, route) {
     row.append(element("td", "muted", times(list, hosts, Math.min)), element("td", "muted", times(list, seen, Math.max)));
     const actions = element("td");
     if (list.length > 0) {
-      const remove = element("button", "small", "Remove");
+      const remove = element("button", "small", "Remove site");
       remove.title = `Remove every learned host of ${site} from ${mask}`;
       remove.addEventListener("click", () => run(remove, { type: "removeSite", mask, site }));
       actions.append(remove);
@@ -125,6 +125,7 @@ function siteRows(mask, hosts, seen, needle, route) {
     if (list.length === 1 && list[0] === site && !root) continue;
     for (const host of list) {
       const remove = element("button", "small", "Remove");
+      remove.title = `Remove ${host} from ${mask}`;
       remove.addEventListener("click", () => run(remove, { type: "removeHost", mask, host }));
       sub(host, formatTime(hosts[host]), seen[host] === undefined ? "—" : formatTime(seen[host]), remove);
     }

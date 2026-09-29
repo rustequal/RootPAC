@@ -357,7 +357,7 @@ table.hosts th:nth-child(4) {
 }
 
 table.hosts th:nth-child(5) {
-  width: 104px;
+  width: 116px;
 }
 
 /* A site row carries the route; its hosts sit under it, indented, without a border of their own. */
