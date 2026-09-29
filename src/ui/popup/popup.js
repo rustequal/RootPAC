@@ -1,8 +1,13 @@
 import { CLOSED_TEXT, INCOGNITO_TEXT, element, formatTime, incognitoAllowed, onStored, proxyErrorText, readLocal, send } from "../shared/rpc.js";
 import { header } from "../shared/logo.js";
 
-const box = document.getElementById("state");
-const banners = document.getElementById("banners");
+// A render builds the card and the messages off the page and puts them in at once, and only when they changed: a popup
+// emptied while it waits for the worker shrinks and grows again, and Chrome redraws its window each time.
+const shown = { box: document.getElementById("state"), banners: document.getElementById("banners") };
+let box = shown.box;
+let banners = shown.banners;
+// The tab the popup shows, once known: storage writes of other tabs do not redraw it.
+let shownTab = null;
 
 document.getElementById("head").replaceWith(header("RootPAC"));
 
@@ -45,11 +50,14 @@ function conflictBanner(conflicts, mask, tabId) {
   head.append(element("div", "title", `Proxy conflict: ${sites.size} site${plural} blocked`));
   // Route here gives this root every site the page is blocked from and reloads the page to use them.
   const routeHere = element("button", "small", "Route here");
+  const hosts = [...new Set(conflicts.map(({ host }) => host))];
+  // What the button sends is part of the markup a redraw compares.
+  routeHere.dataset.hosts = hosts.join(" ");
   routeHere.title = `Send ${sites.size === 1 ? "this site" : "these sites"} through the proxy of ${mask}; the other roots keep their hosts, blocked`;
   routeHere.addEventListener("click", async () => {
     routeHere.disabled = true;
     try {
-      const result = await send({ type: "routeHere", mask, hosts: [...new Set(conflicts.map(({ host }) => host))] });
+      const result = await send({ type: "routeHere", mask, hosts });
       if (!result.ok) throw new Error(result.error);
       await chrome.tabs.reload(tabId);
       window.close();
@@ -125,9 +133,10 @@ async function render() {
     incognitoAllowed(),
     activeTabId(),
   ]);
-  banners.replaceChildren();
-
   const state = tabId === null ? null : await send({ type: "getTabState", tabId });
+  shownTab = tabId;
+  box = element("div");
+  banners = element("div");
   showState(state, tabId);
 
   if (stored.enabled !== true) banner("Proxy is switched off for this extension");
@@ -147,6 +156,18 @@ async function render() {
     const failed = error.count > 1 ? ` (${error.count} requests failed on this page)` : "";
     banner(`${formatTime(error.time)} — ${proxyErrorText(error, stored.appliedPac, stored.userPac)}${failed}`, "banner error");
   }
+  return show();
+}
+
+// Puts a built view in; false when the page already shows the same.
+function show() {
+  const built = { box, banners };
+  box = shown.box;
+  banners = shown.banners;
+  if (built.box.innerHTML === box.innerHTML && built.banners.innerHTML === banners.innerHTML) return false;
+  box.replaceChildren(...built.box.childNodes);
+  banners.replaceChildren(...built.banners.childNodes);
+  return true;
 }
 
 let rendering = null;
@@ -160,12 +181,15 @@ const refresh = () => {
   rendering = (async () => {
     do {
       again = false;
+      let changed = true;
       try {
-        await render();
+        changed = await render();
       } catch (error) {
+        box = shown.box;
+        banners = shown.banners;
         banners.replaceChildren(element("p", "banner error", error.message));
       }
-      fit();
+      if (changed) fit();
     } while (again);
     rendering = null;
   })();
@@ -180,7 +204,11 @@ document.getElementById("log").addEventListener("click", () => {
   chrome.tabs.create({ url: chrome.runtime.getURL("src/ui/log/log.html") });
 });
 
+// What the popup shows: the settings, the groups (the root's known hosts) and owners, the worker's state and this tab.
+const SHOWN = new Set(["enabled", "userPac", "appliedPac", "userPacErrors", "analysis", "sites", "proxies", "lastLearnError", "armed", "startupError"]);
+
 onStored((changes) => {
-  if (Object.keys(changes).some((key) => key !== "logEnabled")) refresh();
+  const tabKey = shownTab === null ? null : `tab:${shownTab}`;
+  if (Object.keys(changes).some((key) => SHOWN.has(key) || key.startsWith("group:") || key === tabKey || (shownTab === null && key.startsWith("tab:")))) refresh();
 });
 refresh();
