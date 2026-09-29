@@ -14,7 +14,7 @@ const open = new Set();
 
 // Which proxy a host goes through for this root. Every host of a site goes through the proxy of the root that owns the
 // site: this root, another root on the same proxy, or another root on a different proxy, in which case the host is
-// blocked here (a proxy conflict) and Route here hands the site to this root.
+// blocked here (a proxy conflict). Route here hands a site another root owns to this root.
 function routeCell(mask, { site, owner, verdict, ownerProxy }, blocked = [], routeHere = null, own = false) {
   const cell = element("td");
   const box = element("div", "route");
@@ -37,12 +37,12 @@ function routeCell(mask, { site, owner, verdict, ownerProxy }, blocked = [], rou
     status.title = `A proxy conflict: ${site} goes through the proxy of ${owner}, so it is blocked for this root. Route here hands the whole site to this root.`;
   }
   box.append(status);
-  // The root's own site handed to another root can always be taken back, on the same proxy too.
-  if (routeHere !== null && (verdict === "conflict" || (own && owner !== mask))) {
+  // Any site another root routes can be taken, on the same proxy too: the owner decides whose proxy the site uses.
+  if (routeHere !== null && owner !== mask) {
     const button = element("button", "small", "Route here");
     button.title = own
       ? `Route ${site} through this root's proxy again`
-      : `Send every host of ${site} through this root's proxy; ${owner} keeps its hosts, blocked, until you route the site back`;
+      : `Send every host of ${site} through this root's proxy; ${owner ?? "every other root"} keeps its hosts, blocked on another proxy, until you route the site back`;
     button.addEventListener("click", () => routeHere(button));
     box.append(button);
   }
