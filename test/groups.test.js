@@ -184,13 +184,24 @@ test("the shared CDN groups from the customer state aggregate inside each root",
   const { groups } = JSON.parse(fixture("shared-cdn-groups.json"));
   const analysis = { roots: ["facebook.com", "instagram.com", "threads.com"], deny: ["*.google-analytics.com", "*.doubleclick.net"], bypass: ["*.ru", "*.xn--p1ai"] };
   const first = aggregateGroups(groups, {}, analysis, PSL);
-  assert.deepEqual(Object.keys(first.groups["instagram.com"].hosts).sort(), ["cdninstagram.com", "fbcdn.net"]);
-  assert.equal(first.groups["instagram.com"].hosts["fbcdn.net"], 1790194698849);
+  // instagram.com's fbcdn.net hosts all lie under fna.fbcdn.net, their nearest common parent; facebook.com's meet
+  // under fbcdn.net as two branches, xx.fbcdn.net and fna.fbcdn.net.
+  assert.deepEqual(Object.keys(first.groups["instagram.com"].hosts).sort(), ["cdninstagram.com", "fna.fbcdn.net"]);
+  assert.equal(first.groups["instagram.com"].hosts["fna.fbcdn.net"], 1790194698849);
   assert.equal(first.groups["instagram.com"].hosts["cdninstagram.com"], 1790194698520);
   assert.deepEqual(first.groups["facebook.com"].hosts, { "fbcdn.net": 1790194708272, "www.fbsbx.com": 1790194810509 });
   assert.equal(first.groups["threads.com"], groups["threads.com"]);
   const second = aggregateGroups(first.groups, first.seen, analysis, PSL);
   assert.equal(second.groups, first.groups);
+});
+
+test("records merge into their nearest common parent, and a wider name only when two branches meet under it", () => {
+  assert.deepEqual(grouped({ "scontent-hel3-1.xx.fbcdn.net": 1, "static.xx.fbcdn.net": 2 }), ["xx.fbcdn.net"]);
+  assert.deepEqual(grouped({ "a.p.q.s.net": 1, "b.p.q.s.net": 2 }), ["p.q.s.net"]);
+  assert.deepEqual(grouped({ "a.p.q.s.net": 1, "b.p.q.s.net": 2, "c.q.s.net": 3 }), ["q.s.net"]);
+  assert.deepEqual(grouped({ "a.x.fbcdn.net": 1, "b.x.fbcdn.net": 2, "c.y.fbcdn.net": 3 }), ["fbcdn.net"]);
+  assert.deepEqual(grouped({ "a.x.fbcdn.net": 1, "c.y.fbcdn.net": 3 }), ["fbcdn.net"]);
+  assert.deepEqual(grouped({ "a.x.fbcdn.net": 1, "b.x.fbcdn.net": 2, "img.org": 3 }), ["img.org", "x.fbcdn.net"]);
 });
 
 test("aggregation is deterministic, idempotent and keeps unchanged objects", () => {

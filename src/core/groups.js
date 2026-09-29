@@ -102,8 +102,12 @@ function labels(name) {
   return name.split(".").length;
 }
 
-function byBreadth(a, b) {
-  return labels(a) - labels(b) || (a < b ? -1 : a > b ? 1 : 0);
+// Deepest names first, the depth counted once per name; the order within a depth does not change the result.
+function deepestFirst(names) {
+  return names
+    .map((name) => [labels(name), name])
+    .sort(([da, a], [db, b]) => db - da || (a < b ? -1 : a > b ? 1 : 0))
+    .map(([, name]) => name);
 }
 
 // A candidate stays inside its site (it is at most the registrable domain), so it may cover a root's domain: the
@@ -123,23 +127,36 @@ function widestOwner(host, owners, psl) {
   return found;
 }
 
+// Records merge into their nearest common parent, narrowest first: a name takes the branches right under it — records,
+// or names that already merged — once there are two or more of them, and a wider name takes merged branches only when
+// two of them meet under it. One pass over the names from the deepest up, so the result is linear in the group.
 function aggregateGroup(group, seen, analysis, psl) {
   const names = Object.keys(group.hosts);
   const present = new Set(names);
-  const under = new Map();
+  // Every parent of a top record up to its registrable domain, with the number of branches right under it so far.
+  const branches = new Map();
+  const domains = new Map();
   for (const host of names) {
     if (!isHostName(host) || widestOwner(host, present, psl) !== host) continue;
     const domain = psl.registrableDomain(host);
     if (domain === null || domain === host) continue;
     for (let name = parentOf(host); ; name = parentOf(name)) {
-      under.set(name, (under.get(name) ?? 0) + 1);
+      if (!branches.has(name)) {
+        branches.set(name, 0);
+        domains.set(name, domain);
+      }
       if (name === domain) break;
     }
+    branches.set(parentOf(host), branches.get(parentOf(host)) + 1);
   }
   const accepted = new Set();
-  for (const domain of [...under.keys()].sort(byBreadth)) {
-    if (under.get(domain) < AGGREGATE_MIN_HOSTS || widestOwner(domain, accepted, psl) !== null || !canAggregate(domain, analysis)) continue;
-    accepted.add(domain);
+  for (const name of deepestFirst([...branches.keys()])) {
+    const count = branches.get(name);
+    const merged = count >= AGGREGATE_MIN_HOSTS && canAggregate(name, analysis);
+    if (merged) accepted.add(name);
+    if (name === domains.get(name)) continue;
+    // A merged name is one branch of its parent; otherwise its branches stay apart and count there.
+    branches.set(parentOf(name), branches.get(parentOf(name)) + (merged ? 1 : count));
   }
   const owners = accepted.size === 0 ? present : new Set([...present, ...accepted]);
   const hosts = {};
