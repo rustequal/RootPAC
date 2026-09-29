@@ -398,8 +398,8 @@ table.hosts tr.sub td {
   font-size: 13px;
 }
 
+/* Host names line up with the site's name, the "root site" label included. */
 table.hosts tr.sub td.host {
-  padding-left: 22px;
   color: var(--muted);
 }
 

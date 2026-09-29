@@ -109,9 +109,12 @@ function siteRows(mask, sites, hosts, seen, needle, route) {
     }
     row.append(actions);
     table.append(row);
+    // A host line has no route of its own: its name takes the route column too and wraps only past both.
     const sub = (host, learned, last, action = null) => {
       const line = element("tr", "sub");
-      line.append(element("td", "host", host), element("td"), element("td", "muted", learned), element("td", "muted", last));
+      const name = element("td", "host", host);
+      name.colSpan = 2;
+      line.append(name, element("td", "muted", learned), element("td", "muted", last));
       const cell = element("td", "actions");
       if (action !== null) cell.append(action);
       line.append(cell);
