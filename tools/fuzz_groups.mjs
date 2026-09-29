@@ -9,7 +9,7 @@ import { covers, hostFromUrl, isHostName, isLearnable, learnedOwner, maskDomain,
 import { underLocalhost } from "../src/core/names.js";
 import { parsePublicSuffixList } from "../src/core/psl.js";
 import { buildRules, intersectPolicies, policyOf } from "../src/core/rules.js";
-import { routeThrough } from "../src/core/routes.js";
+import { claimSites, normalizeSites, releaseSites, rootHostOf, routeSites, siteOf } from "../src/core/routes.js";
 
 const ROOT = new URL("../", import.meta.url);
 const PSL = parsePublicSuffixList(readFileSync(new URL("vendor/public_suffix_list.dat", ROOT), "utf8"));
@@ -72,18 +72,24 @@ const userDecision = (host, roots) => {
   return i < 0 ? "DIRECT" : `PROXY p${i}.proxy:1`;
 };
 
-function oracle(host, { roots, bypass }, groups) {
-  if (roots.some((mask) => covers(mask, host))) return userDecision(host, roots);
-  const masks = Object.keys(groups).sort();
+// A root routes its own site by the User PAC; every learned host goes through the owner of its site; a site without an
+// owner has no route; a root whose site another root owns goes through that root.
+function oracle(host, { roots, bypass }, groups, sites) {
+  const through = (owner) => userDecision(rootHostOf(owner, groups), roots);
+  const root = roots.find((mask) => covers(mask, host));
+  if (root !== undefined) {
+    const owner = sites[siteOf(root, PSL)];
+    return owner === root ? userDecision(host, roots) : through(owner);
+  }
   let found = null;
   const labels = host.split(".");
   for (let k = labels.length - 1; k >= 0; k--) {
     const name = labels.slice(k).join(".");
     if (name.length > 253 || (k > 0 && PSL.isPublicSuffix(name))) continue;
-    const holders = masks.filter((m) => Object.hasOwn(groups[m].hosts, name));
-    if (holders.length > 0) found = groups[holders.reduce((a, b) => (groups[b].hosts[name] > groups[a].hosts[name] ? b : a))];
+    const owner = sites[siteOf(name, PSL)];
+    if (owner !== undefined && Object.values(groups).some((group) => Object.hasOwn(group.hosts, name))) found = owner;
   }
-  if (found !== null) return userDecision(found.rootHost, roots);
+  if (found !== null) return through(found);
   return firstMatch(host, bypass) !== null ? "DIRECT" : userDecision(host, roots);
 }
 
@@ -111,7 +117,7 @@ const allowedInRootContext = (rules, host, top) => allowedIn(rules, host, top);
 
 // What the trial run records for each root: the User PAC's answer for its rootHost.
 function proxiesFor(groups, roots) {
-  return Object.fromEntries(Object.entries(groups).flatMap(([mask, { rootHost }]) => (rootHost === null ? [] : [[mask, { host: rootHost, answer: userDecision(rootHost, roots) }]])));
+  return Object.fromEntries(Object.keys(groups).map((mask) => [mask, { host: rootHostOf(mask, groups), answer: userDecision(rootHostOf(mask, groups), roots) }]));
 }
 
 // The root a request belongs to: its page's root, else its frame's root.
@@ -137,8 +143,8 @@ function check(tag, state, analysis, userPac, extra, learnedAlone) {
   let pac;
   let rules;
   try {
-    pac = buildSystemPac(userPac, state.groups, PSL);
-    rules = buildRules(policyOf({ enabled: true, analysis, groups: state.groups, proxies: proxiesFor(state.groups, analysis.roots) }, PSL));
+    pac = buildSystemPac(userPac, state.groups, PSL, state.sites);
+    rules = buildRules(policyOf({ enabled: true, analysis, groups: state.groups, sites: state.sites, proxies: proxiesFor(state.groups, analysis.roots) }, PSL));
   } catch (error) {
     flag("build or rules throw", { tag, message: error.message });
     return null;
@@ -148,7 +154,7 @@ function check(tag, state, analysis, userPac, extra, learnedAlone) {
   const context = loadPac(pac);
   for (const host of probesOf(state.groups, analysis, extra)) {
     const got = route(context, host);
-    const expected = oracle(host, analysis, state.groups);
+    const expected = oracle(host, analysis, state.groups, state.sites);
     if (got !== expected) flag("router differs from the oracle", { tag, host, got, expected });
     const bypassed = firstMatch(host, analysis.bypass) !== null;
     for (const top of analysis.roots) {
@@ -156,13 +162,13 @@ function check(tag, state, analysis, userPac, extra, learnedAlone) {
       if (got === "DIRECT" && !bypassed) flag("LEAK: DNR allows what the PAC sends DIRECT", { tag, host, top });
       if (underLocalhost(host) && !bypassed) flag("a localhost name is allowed in a root context", { tag, host });
     }
-    if (bypassed || rootOf(host, analysis.roots) !== null) continue;
+    if (bypassed) continue;
     const domains = analysis.roots.map(maskDomain);
     for (const [top, initiator] of [...domains.map((d) => [d, d]), ...domains.map((d) => [d, NEUTRAL]), ...domains.map((d) => [NEUTRAL, d]), ...domains.flatMap((a) => domains.map((b) => [a, b]))]) {
       if (!allowedIn(rules, host, top, initiator)) continue;
       const mask = contextRoot(top, initiator, analysis.roots);
       const group = mask === null ? undefined : state.groups[mask];
-      const own = group === undefined || group.rootHost === null ? null : userDecision(group.rootHost, analysis.roots);
+      const own = group === undefined ? null : userDecision(rootHostOf(mask, state.groups), analysis.roots);
       if (got !== own) flag("LEAK: a root reaches a host through another root's proxy", { tag, host, top, initiator, mask, got, own });
     }
   }
@@ -176,7 +182,7 @@ function check(tag, state, analysis, userPac, extra, learnedAlone) {
 
 function transition(tag, prev, next) {
   if (prev === null || next === null) return;
-  const policyFor = ({ analysis, state }) => policyOf({ enabled: true, analysis, groups: state.groups, proxies: proxiesFor(state.groups, analysis.roots) }, PSL);
+  const policyFor = ({ analysis, state }) => policyOf({ enabled: true, analysis, groups: state.groups, sites: state.sites, proxies: proxiesFor(state.groups, analysis.roots) }, PSL);
   const policy = intersectPolicies(policyFor(prev), policyFor(next));
   const rules = buildRules(policy);
   const contexts = [loadPac(prev.pac), loadPac(next.pac)];
@@ -212,10 +218,11 @@ function fuzz(seed) {
     const random = prng(seed * 100003 + run);
     const s = scenario(random);
     let userPac = userPacText(s.config());
-    let result = analyzeUserPac(userPac);
+    let result = analyzeUserPac(userPac, PSL);
     if (!result.ok) continue;
     let analysis = { roots: result.roots, deny: result.deny, bypass: result.bypass };
-    let state = { groups: reconcileGroups({}, analysis), seen: {} };
+    const empty = reconcileGroups({}, analysis);
+    let state = { groups: empty, seen: {}, sites: normalizeSites(null, empty, analysis.roots, PSL, []) };
     const learnedAlone = new Set();
     let previous = null;
     for (let step = 0; step < STEPS; step++) {
@@ -241,37 +248,41 @@ function fuzz(seed) {
         }
         if (batch.length > 0) {
           for (const [target] of batch) learnedAlone.add(target);
-          state = aggregateGroups(mergeGroups(state.groups, batch, step), state.seen, analysis, PSL);
+          const sites = claimSites(state.sites, batch.map(([target, { mask }]) => [target, mask]), PSL);
+          state = { ...aggregateGroups(mergeGroups(state.groups, batch, step), state.seen, analysis, PSL), sites };
           for (const [, { mask, host }] of batch) if (learnedOwner(host, ownIndex(state.groups, mask), PSL) === null) flag("a learned host is unknown to its root", { tag, host, mask });
         }
       } else if (roll < 0.85) {
         const text = userPacText(s.config());
-        result = analyzeUserPac(text);
+        result = analyzeUserPac(text, PSL);
         if (!result.ok) continue;
         userPac = text;
+        const previousRoots = analysis.roots;
         analysis = { roots: result.roots, deny: result.deny, bypass: result.bypass };
         const adopted = adoptLegacyGroups(state.groups, state.seen, analysis.roots);
-        const reconciled = reconcileGroups(adopted.groups, analysis);
-        state = aggregateGroups(reconciled, pruneSeen(adopted.seen, reconciled), analysis, PSL);
+        const reconciled = releaseSites(reconcileGroups(adopted.groups, analysis), state.sites, analysis.roots, PSL);
+        const next = aggregateGroups(reconciled, pruneSeen(adopted.seen, reconciled), analysis, PSL);
+        state = { ...next, sites: normalizeSites(state.sites, next.groups, analysis.roots, PSL, previousRoots) };
       } else if (roll < 0.93) {
         const masks = Object.keys(state.groups).filter((mask) => Object.keys(state.groups[mask].hosts).length > 0);
         if (masks.length === 0) continue;
         const mask = s.pick(masks);
-        const shared = [...hostIndex(state.groups)].filter(([, holders]) => holders.length > 1);
-        if (shared.length > 0 && random() < 0.5) {
-          // Route here: one holder of a shared record takes its route.
-          const [host, holders] = s.pick(shared);
-          state = { groups: routeThrough(state.groups, s.pick(holders), host, step), seen: state.seen };
+        if (random() < 0.5) {
+          // Route here: a root takes the site of one of its hosts, or another root's whole site.
+          const name = random() < 0.3 ? s.pick(analysis.roots) : s.pick(Object.keys(state.groups[mask].hosts));
+          state = { ...state, sites: routeSites(state.sites, mask, [name], PSL) };
         } else {
           const hosts = { ...state.groups[mask].hosts };
           delete hosts[s.pick(Object.keys(hosts))];
-          state = { groups: { ...state.groups, [mask]: { rootHost: state.groups[mask].rootHost, hosts } }, seen: pruneSeen(state.seen, state.groups) };
+          const groups = { ...state.groups, [mask]: { rootHost: state.groups[mask].rootHost, hosts } };
+          state = { groups, seen: pruneSeen(state.seen, groups), sites: normalizeSites(state.sites, groups, analysis.roots, PSL) };
         }
       } else {
         try {
-          const read = readBackup(JSON.parse(JSON.stringify(exportBackup({ userPac, groups: state.groups }))));
-          buildSystemPac(read.userPac, read.groups, PSL);
-          state = { groups: aggregateGroups(read.groups, {}, read.analysis, PSL).groups, seen: {} };
+          const read = readBackup(JSON.parse(JSON.stringify(exportBackup({ userPac, groups: state.groups, sites: state.sites }))), PSL);
+          buildSystemPac(read.userPac, read.groups, PSL, read.sites);
+          const groups = aggregateGroups(read.groups, {}, read.analysis, PSL).groups;
+          state = { groups, seen: {}, sites: normalizeSites(read.sites, groups, read.analysis.roots, PSL) };
         } catch (error) {
           flag("export and import do not round-trip", { tag, message: error.message });
         }

@@ -66,7 +66,7 @@ test("hosts loaded by a root tab are learned, proxied and allowed", async () => 
   await settled(learner);
   assert.deepEqual(learned(area), { rootHost: "www.instagram.com", hosts: { "static.cdninstagram.com": 1000 } });
   assert.equal(loadPac(browser.pac()).FindProxyForURL("https://static.cdninstagram.com/", "static.cdninstagram.com"), "SOCKS5 10.1.4.1:9487");
-  assert.deepEqual(browser.sessionRules.get(RULE_IDS.hosts).condition.requestDomains, ["static.cdninstagram.com"]);
+  assert.deepEqual(browser.sessionRules.get(RULE_IDS.hosts).condition.requestDomains, ["instagram.com", "static.cdninstagram.com"]);
   assert.deepEqual(browser.journal.names(), ["prediction.set", "webrtc.set", "proxy.set", "dnr.session"]);
 });
 
@@ -179,13 +179,13 @@ test("a failing apply releases the loop and later hosts are still learned", asyn
   request(learner, "https://a.cdn-a.net/1");
   await settled(learner);
   assert.equal(learner.running, false);
-  assert.deepEqual(browser.sessionRules.has(RULE_IDS.hosts), false);
+  assert.deepEqual(browser.sessionRules.get(RULE_IDS.hosts).condition.requestDomains, ["instagram.com"]);
   assert.deepEqual(learned(area).hosts, {});
   request(learner, "https://a.cdn-a.net/2");
   request(learner, "https://b.cdn-b.net/1");
   await settled(learner);
   assert.deepEqual(Object.keys(learned(area).hosts), ["a.cdn-a.net", "b.cdn-b.net"]);
-  assert.deepEqual(browser.sessionRules.get(RULE_IDS.hosts).condition.requestDomains, ["a.cdn-a.net", "b.cdn-b.net"]);
+  assert.deepEqual(browser.sessionRules.get(RULE_IDS.hosts).condition.requestDomains, ["a.cdn-a.net", "b.cdn-b.net", "instagram.com"]);
 });
 
 test("lastSeen is written once per host per browser session without rebuilding the PAC", async () => {
@@ -266,12 +266,12 @@ test("hosts sharing a registrable domain are aggregated and covered subdomains a
   assert.deepEqual(learned(area).hosts, { "rr1---sn-a.googlevideo.com": 1000 });
   request(learner, "https://rr2---sn-b.googlevideo.com/v");
   await settled(learner);
-  assert.deepEqual(learned(area).hosts, { "googlevideo.com": 1001 });
-  assert.deepEqual(browser.sessionRules.get(RULE_IDS.hosts).condition.requestDomains, ["googlevideo.com"]);
+  assert.deepEqual(learned(area).hosts, { "googlevideo.com": 1000 });
+  assert.deepEqual(browser.sessionRules.get(RULE_IDS.hosts).condition.requestDomains, ["googlevideo.com", "instagram.com"]);
   browser.journal.clear();
   request(learner, "https://rr3---sn-c.googlevideo.com/v");
   await settled(learner);
-  assert.deepEqual(learned(area).hosts, { "googlevideo.com": 1001 });
+  assert.deepEqual(learned(area).hosts, { "googlevideo.com": 1000 });
   assert.deepEqual(browser.journal.entries, []);
   assert.deepEqual(area.items["seen:instagram.com"], { "googlevideo.com": 1002 });
   assert.deepEqual((await session.get("seenThisSession")).seenThisSession, ["instagram.com googlevideo.com"]);

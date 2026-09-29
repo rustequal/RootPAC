@@ -198,7 +198,7 @@ test("an untrained group routes everything through the User PAC", () => {
   assert.equal(route(pac, "static.cdninstagram.com"), "DIRECT");
 });
 
-test("a name learned in several groups routes by the first group in mask order", () => {
+test("every learned host of a site, in any group, routes through the owner of the site", () => {
   const userPac = [
     "function FindProxyForURL(url, host) {",
     '  if (root(host, "a.com")) return "PROXY a:1";',
@@ -206,15 +206,19 @@ test("a name learned in several groups routes by the first group in mask order",
     '  return "DIRECT";',
     "}",
   ].join("\n");
-  const pac = loadPac(
-    buildSystemPac(userPac, {
-      "b.com": { rootHost: "www.b.com", hosts: { "cdn.net": 1, "only.b.cdn.net": 1 } },
-      "a.com": { rootHost: "www.a.com", hosts: { "cdn.net": 1 } },
-    }, PSL),
-  );
+  const groups = {
+    "b.com": { rootHost: "www.b.com", hosts: { "cdn.net": 1, "only.b.cdn.net": 1, "img.org": 1 } },
+    "a.com": { rootHost: "www.a.com", hosts: { "cdn.net": 1 } },
+  };
+  const pac = loadPac(buildSystemPac(userPac, groups, PSL, { "a.com": "a.com", "b.com": "b.com", "cdn.net": "a.com", "img.org": "b.com" }));
   assert.equal(route(pac, "x.cdn.net"), "PROXY a:1");
   assert.equal(route(pac, "cdn.net"), "PROXY a:1");
-  assert.equal(route(pac, "z.only.b.cdn.net"), "PROXY b:1");
+  assert.equal(route(pac, "z.only.b.cdn.net"), "PROXY a:1");
+  assert.equal(route(pac, "img.org"), "PROXY b:1");
+  const handed = loadPac(buildSystemPac(userPac, groups, PSL, { "a.com": "b.com", "b.com": "b.com", "cdn.net": "a.com", "img.org": "b.com" }));
+  assert.equal(route(handed, "www.a.com"), "PROXY b:1");
+  const orphan = loadPac(buildSystemPac(userPac, groups, PSL, { "a.com": "a.com", "b.com": "b.com", "cdn.net": "a.com" }));
+  assert.equal(route(orphan, "img.org"), "DIRECT");
 });
 
 test("a name learned in several groups routes by the group that learned it last", () => {

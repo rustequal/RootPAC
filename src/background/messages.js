@@ -3,7 +3,7 @@ import { exportBackup, readBackup } from "../core/backup.js";
 import { buildSystemPac } from "../core/build.js";
 import { rootOf } from "../core/hosts.js";
 import { adoptLegacyGroups, aggregateGroups, pruneSeen, reconcileGroups } from "../core/groups.js";
-import { answersOf, proxiesOf, routeThrough, sharedRoutes } from "../core/routes.js";
+import { answersOf, bootstrapSites, normalizeSites, proxiesOf, releaseSites, routeSites, sharedRoutes } from "../core/routes.js";
 import { trialAnswers, trialErrors, trialPlan } from "../core/trial.js";
 import { NO_LOG } from "./log.js";
 
@@ -23,16 +23,27 @@ function requireValidUserPac(state) {
 
 
 export function createCommands({ store, engine, checker, learner, log = NO_LOG, now = Date.now }) {
-  const normalize = (groups, seen, analysis) => {
-    const adopted = adoptLegacyGroups(groups, seen, analysis.roots);
-    const reconciled = reconcileGroups(adopted.groups, analysis);
-    return aggregateGroups(reconciled, pruneSeen(adopted.seen, reconciled), analysis, store.psl);
+  // The groups, their seen times and the site owners for a User PAC, from the state it replaces.
+  const normalize = (state, analysis) => {
+    const adopted = adoptLegacyGroups(state.groups, state.seen, analysis.roots);
+    const owners = state.sites ?? bootstrapSites(adopted.groups, state.analysis?.roots ?? analysis.roots, store.psl);
+    const reconciled = releaseSites(reconcileGroups(adopted.groups, analysis), owners, analysis.roots, store.psl);
+    const { groups, seen } = aggregateGroups(reconciled, pruneSeen(adopted.seen, reconciled), analysis, store.psl);
+    const sites = normalizeSites(owners, groups, analysis.roots, store.psl, state.analysis?.roots ?? []);
+    return { groups, seen, sites };
   };
 
-  const rebuild = (state, groups, seen) => ({ ...state, groups, seen, appliedPac: buildSystemPac(state.userPac, groups, store.psl) });
+  // Groups changed by a command: the owners of sites nobody holds any more are dropped.
+  const rebuild = (state, groups, seen, sites = normalizeSites(state.sites, groups, state.analysis.roots, store.psl)) => ({
+    ...state,
+    groups,
+    seen,
+    sites,
+    appliedPac: buildSystemPac(state.userPac, groups, store.psl, sites),
+  });
 
-  const trial = async (userPac, analysis, groups) => {
-    const systemPac = buildSystemPac(userPac, groups, store.psl);
+  const trial = async (userPac, analysis, { groups, sites }) => {
+    const systemPac = buildSystemPac(userPac, groups, store.psl, sites);
     const { request, shifts } = trialPlan(systemPac, analysis, groups);
     const { cancelled, outcome } = await checker.run(request);
     if (cancelled) throw new Error("Check was cancelled");
@@ -41,14 +52,14 @@ export function createCommands({ store, engine, checker, learner, log = NO_LOG, 
 
   const saveUserPac = async ({ text }) => {
     requireString(text, "text");
-    const result = analyzeUserPac(text);
+    const result = analyzeUserPac(text, store.psl);
     if (!result.ok) return { ok: false, errors: result.errors };
     const analysis = { roots: result.roots, deny: result.deny, bypass: result.bypass };
-    const { errors, answers } = await trial(text, analysis, normalize(store.state.groups, store.state.seen, analysis).groups);
+    const { errors, answers } = await trial(text, analysis, normalize(store.state, analysis));
     if (errors.length > 0) return { ok: false, errors };
     return store.run(async (state) => {
-      const { groups, seen } = normalize(state.groups, state.seen, analysis);
-      const next = rebuild({ ...state, userPac: text, analysis, userPacErrors: null, proxies: proxiesOf(groups, answers) }, groups, seen);
+      const { groups, seen, sites } = normalize(state, analysis);
+      const next = rebuild({ ...state, userPac: text, analysis, userPacErrors: null, proxies: proxiesOf(groups, answers) }, groups, seen, sites);
       const control = await engine.commit(next);
       return { ok: true, errors: [], analysis, control };
     });
@@ -72,21 +83,20 @@ export function createCommands({ store, engine, checker, learner, log = NO_LOG, 
     });
   };
 
-  // Route here: the root's proxy carries these records it shares with roots on other proxies; every root keeps them.
+  // Route here: the root takes the sites of these names, hosts it holds or root domains; every host of those sites, in
+  // any group, then goes through its proxy.
   const routeHere = async ({ mask, hosts }) => {
     if (!Array.isArray(hosts) || hosts.length === 0) throw new TypeError("hosts must be a non-empty array");
     for (const host of hosts) requireString(host, "host");
     return store.run(async (state) => {
       requireValidUserPac(state);
       const group = requireGroup(state, mask);
-      const time = now();
-      let groups = state.groups;
       for (const host of hosts) {
-        if (!Object.hasOwn(group.hosts, host)) throw new Error(`Host ${JSON.stringify(host)} is not in group ${JSON.stringify(mask)}`);
-        groups = routeThrough(groups, mask, host, time);
+        if (!Object.hasOwn(group.hosts, host) && !state.analysis.roots.includes(host)) throw new Error(`Host ${JSON.stringify(host)} is not in group ${JSON.stringify(mask)}`);
       }
-      if (groups === state.groups) return { ok: true, control: null };
-      return { ok: true, control: await engine.commit(rebuild(state, groups, state.seen)) };
+      const sites = routeSites(state.sites, mask, hosts, store.psl);
+      if (sites === state.sites) return { ok: true, control: null };
+      return { ok: true, control: await engine.commit(rebuild(state, state.groups, state.seen, sites)) };
     });
   };
 
@@ -102,15 +112,18 @@ export function createCommands({ store, engine, checker, learner, log = NO_LOG, 
   const exportState = async () => store.run(async (state) => ({ ok: true, backup: exportBackup(state) }));
 
   const importState = async ({ backup }) => {
-    const read = readBackup(backup);
+    const read = readBackup(backup, store.psl);
     if (!read.ok) return { ok: false, errors: read.errors };
     const { userPac, analysis } = read;
     buildSystemPac(userPac, read.groups, store.psl);
-    const { groups } = aggregateGroups(read.groups, {}, analysis, store.psl);
-    const { errors, answers } = await trial(userPac, analysis, groups);
+    // Owners the backup names win; a site it names no owner for, or a schema 1 backup, gets the route it had.
+    const owners = { ...bootstrapSites(read.groups, analysis.roots, store.psl), ...(read.sites ?? {}) };
+    const { groups } = aggregateGroups(releaseSites(read.groups, owners, analysis.roots, store.psl), {}, analysis, store.psl);
+    const sites = normalizeSites(owners, groups, analysis.roots, store.psl);
+    const { errors, answers } = await trial(userPac, analysis, { groups, sites });
     if (errors.length > 0) return { ok: false, errors };
     return store.run(async (state) => {
-      const next = rebuild({ ...state, userPac, analysis, userPacErrors: null, proxies: proxiesOf(groups, answers) }, groups, {});
+      const next = rebuild({ ...state, userPac, analysis, userPacErrors: null, proxies: proxiesOf(groups, answers) }, groups, {}, sites);
       const control = await engine.commit(next);
       return { ok: true, errors: [], analysis, control };
     });

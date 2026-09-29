@@ -5,6 +5,7 @@ import { createCommands } from "../src/background/messages.js";
 import { Store } from "../src/background/store.js";
 import { buildSystemPac } from "../src/core/build.js";
 import { RULE_IDS } from "../src/core/rules.js";
+import { claimSites } from "../src/core/routes.js";
 import { FakeArea, FakeBrowser } from "./fakes.js";
 import { fixture, loadPac, vmChecker, PSL } from "./support.js";
 import { createProxy } from "../src/background/proxy.js";
@@ -29,15 +30,18 @@ async function restartedEngine(area, browser) {
 }
 
 const CLOSED = [RULE_IDS.block, RULE_IDS.deny, RULE_IDS.frame, RULE_IDS.reports, RULE_IDS.reportsFrame, RULE_IDS.embeds, RULE_IDS.rootRequests];
-const OPEN = [...CLOSED.slice(0, 3), RULE_IDS.unlock, ...CLOSED.slice(3), RULE_IDS.roots];
+// Each root allows its own domain in its pages and its frames, so an open root always has two context rules.
+const OPEN = [...CLOSED.slice(0, 3), RULE_IDS.unlock, ...CLOSED.slice(3), RULE_IDS.roots, RULE_IDS.hosts, RULE_IDS.hosts + 1];
 
-// The hosts a root's pages may load; each is allowed once for the pages and once for the root's own frames.
+// The learned hosts a root's pages may load, root domains aside; each is allowed once for the pages and once for the
+// root's own frames.
 function allowedHosts(rules) {
+  const roots = new Set(rules.filter(({ id }) => id === RULE_IDS.frame).flatMap(({ condition }) => condition.requestDomains));
   const scoped = rules.filter(({ id, action }) => id >= RULE_IDS.hosts && action.type === "allow");
   const pages = scoped.filter(({ condition }) => condition.topDomains !== undefined).flatMap(({ condition }) => condition.requestDomains);
   const frames = scoped.filter(({ condition }) => condition.initiatorDomains !== undefined).flatMap(({ condition }) => condition.requestDomains);
   assert.deepEqual(frames, pages);
-  return pages;
+  return pages.filter((host) => !roots.has(host));
 }
 
 function allowedRoots(rules) {
@@ -60,7 +64,8 @@ function learn(store, engine, host, mask = "instagram.com", rootHost = "www.inst
   return store.run((state) => {
     const group = state.groups[mask];
     const groups = { ...state.groups, [mask]: { rootHost: group.rootHost ?? rootHost, hosts: { ...group.hosts, [host]: 1 } } };
-    return engine.commit({ ...state, groups, appliedPac: buildSystemPac(state.userPac, groups, PSL) });
+    const sites = claimSites(state.sites, [[host, mask]], PSL);
+    return engine.commit({ ...state, groups, sites, appliedPac: buildSystemPac(state.userPac, groups, PSL, sites) });
   });
 }
 
@@ -71,9 +76,9 @@ test("first configuration blocks before it proxies and allows last", async () =>
   assert.deepEqual(browser.journal.names(), ["dnr.update", "prediction.set", "webrtc.set", "proxy.set", "dnr.session"]);
   const [[, blocks], [, allows]] = browser.journal.entries.filter(([name]) => name.startsWith("dnr."));
   assert.deepEqual(blocks.addRules.map(({ id }) => id).sort((a, b) => a - b), CLOSED);
-  assert.deepEqual(allows.addRules.map(({ id }) => id), [RULE_IDS.unlock, RULE_IDS.roots]);
+  assert.deepEqual(allows.addRules.map(({ id }) => id), [RULE_IDS.unlock, RULE_IDS.roots, RULE_IDS.hosts, RULE_IDS.hosts + 1]);
   assert.deepEqual(browser.ruleIds(), OPEN);
-  assert.deepEqual([...browser.sessionRules.keys()], [RULE_IDS.unlock, RULE_IDS.roots]);
+  assert.deepEqual([...browser.sessionRules.keys()], [RULE_IDS.unlock, RULE_IDS.roots, RULE_IDS.hosts, RULE_IDS.hosts + 1]);
   assert.equal(engine.armed, true);
   assert.deepEqual(session.items, { armed: true, openedAt: 1000 });
   assertNoLeakWindow(browser);
@@ -110,7 +115,7 @@ test("aggregation keeps the covered hosts allowed while the PAC changes", async 
   const first = browser.snapshots.length;
   await store.run((state) => {
     const groups = { ...state.groups, "instagram.com": { rootHost: "www.instagram.com", hosts: { "cdn.net": 1 } } };
-    return engine.commit({ ...state, groups, appliedPac: buildSystemPac(state.userPac, groups, PSL) });
+    return engine.commit({ ...state, groups, appliedPac: buildSystemPac(state.userPac, groups, PSL, state.sites) });
   });
   assert.deepEqual(browser.journal.names(), ["prediction.set", "webrtc.set", "proxy.set", "dnr.session"]);
   const during = browser.snapshots.slice(first, -1);

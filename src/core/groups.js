@@ -105,9 +105,11 @@ function byBreadth(a, b) {
   return labels(a) - labels(b) || (a < b ? -1 : a > b ? 1 : 0);
 }
 
+// A candidate stays inside its site (it is at most the registrable domain), so it may cover a root's domain: the
+// route is the site's either way. It may not lie under a root, whose hosts are never learned, or a deny or bypass mask.
 function canAggregate(domain, { roots, deny, bypass }) {
   if (rootOf(domain, roots) !== null || underDeny(domain, deny) || firstMatch(domain, bypass) !== null) return false;
-  return ![...roots, ...deny, ...bypass].some((pattern) => covers(domain, maskDomain(pattern)));
+  return ![...deny, ...bypass].some((pattern) => covers(domain, maskDomain(pattern)));
 }
 
 function widestOwner(host, owners, psl) {
@@ -144,9 +146,7 @@ function aggregateGroup(group, seen, analysis, psl) {
   for (const host of names) {
     const owner = widestOwner(host, owners, psl);
     if (owner !== host) changed = true;
-    // A record's time is when its root learned it last, which decides the route of a record several roots hold
-    // (core/routes.js), so a widened record keeps the latest time of the records it takes in.
-    hosts[owner] = Object.hasOwn(hosts, owner) ? Math.max(hosts[owner], group.hosts[host]) : group.hosts[host];
+    hosts[owner] = Object.hasOwn(hosts, owner) ? Math.min(hosts[owner], group.hosts[host]) : group.hosts[host];
     if (entries !== undefined && Object.hasOwn(seen, host)) entries[owner] = Object.hasOwn(entries, owner) ? Math.max(entries[owner], seen[host]) : seen[host];
   }
   return changed ? { hosts, entries } : { hosts: group.hosts, entries: seen };

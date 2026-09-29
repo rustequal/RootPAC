@@ -1,6 +1,7 @@
 import { analyzeUserPac } from "../core/analyze.js";
 import { buildSystemPac } from "../core/build.js";
 import { adoptLegacyGroups, aggregateGroups, pruneSeen, reconcileGroups } from "../core/groups.js";
+import { bootstrapSites, normalizeSites, releaseSites } from "../core/routes.js";
 import { LOG_SETTING } from "./log.js";
 
 export const SCHEMA_VERSION = 1;
@@ -8,12 +9,12 @@ export const SCHEMA_VERSION = 1;
 const GROUP = "group:";
 const SEEN = "seen:";
 const VERIFIED = "stateVerified";
-const SCALARS = ["enabled", "userPac", "analysis", "appliedPac", "userPacErrors", "proxies"];
+const SCALARS = ["enabled", "userPac", "analysis", "appliedPac", "userPacErrors", "proxies", "sites"];
 // Settings of the pages that are not part of the routing state; the store leaves them alone.
 const SETTINGS = new Set([LOG_SETTING]);
 
 function decode(items) {
-  const state = { enabled: true, userPac: null, analysis: null, appliedPac: null, userPacErrors: null, proxies: null, groups: {}, seen: {} };
+  const state = { enabled: true, userPac: null, analysis: null, appliedPac: null, userPacErrors: null, proxies: null, sites: null, groups: {}, seen: {} };
   for (const [key, value] of Object.entries(items)) {
     if (key === "schemaVersion" || SETTINGS.has(key)) continue;
     if (SCALARS.includes(key)) state[key] = value;
@@ -33,6 +34,7 @@ function decode(items) {
   }
   if (state.analysis !== null && !isAnalysis(state.analysis)) throw new Error("Stored analysis is malformed");
   if (!isProxies(state.proxies)) throw new Error("Stored proxies are malformed");
+  if (!(state.sites === null || (isRecord(state.sites) && Object.values(state.sites).every((mask) => typeof mask === "string")))) throw new Error("Stored sites are malformed");
   for (const [mask, group] of Object.entries(state.groups)) {
     const valid = isRecord(group) && (group.rootHost === null || typeof group.rootHost === "string") && isRecord(group.hosts) && Object.values(group.hosts).every(isTime);
     if (!valid) throw new Error(`Stored group ${JSON.stringify(mask)} is malformed`);
@@ -62,19 +64,24 @@ function isAnalysis(analysis) {
   return isRecord(analysis) && masks(analysis.roots) && masks(analysis.deny) && (analysis.bypass === undefined || masks(analysis.bypass));
 }
 
+
 function refresh(state, psl) {
-  if (state.userPac === null) return { ...state, groups: {}, seen: {} };
-  const result = analyzeUserPac(state.userPac);
+  if (state.userPac === null) return { ...state, groups: {}, seen: {}, sites: null };
+  const result = analyzeUserPac(state.userPac, psl);
   if (!result.ok) {
     const same = JSON.stringify(result.errors) === JSON.stringify(state.userPacErrors);
-    return { ...state, userPacErrors: same ? state.userPacErrors : result.errors };
+    const sites = state.sites ?? bootstrapSites(state.groups, state.analysis.roots, psl);
+    return { ...state, sites, userPacErrors: same ? state.userPacErrors : result.errors };
   }
   const fresh = { roots: result.roots, deny: result.deny, bypass: result.bypass };
   const analysis = JSON.stringify(fresh) === JSON.stringify(state.analysis) ? state.analysis : fresh;
   const adopted = adoptLegacyGroups(state.groups, state.seen, analysis.roots);
-  const reconciled = reconcileGroups(adopted.groups, analysis);
+  // The owner of each site (core/routes.js); a state from a version without owners gets the routes it had.
+  const owners = state.sites ?? bootstrapSites(adopted.groups, analysis.roots, psl);
+  const reconciled = releaseSites(reconcileGroups(adopted.groups, analysis), owners, analysis.roots, psl);
   const { groups, seen } = aggregateGroups(reconciled, pruneSeen(adopted.seen, reconciled), analysis, psl);
-  return { ...state, analysis, groups, seen, appliedPac: buildSystemPac(state.userPac, groups, psl), userPacErrors: null };
+  const sites = normalizeSites(owners, groups, analysis.roots, psl, state.analysis?.roots ?? analysis.roots);
+  return { ...state, analysis, groups, seen, sites, appliedPac: buildSystemPac(state.userPac, groups, psl, sites), userPacErrors: null };
 }
 
 function diffRecords(prefix, prev, next, set, remove) {

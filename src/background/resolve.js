@@ -1,4 +1,4 @@
-import { proxiesOf, unchecked } from "../core/routes.js";
+import { proxiesOf, rootHostOf, unchecked } from "../core/routes.js";
 import { probePlan, trialAnswers, trialErrors } from "../core/trial.js";
 import { NO_LOG } from "./log.js";
 
@@ -20,7 +20,7 @@ export function createResolver({ store, engine, checker, log = NO_LOG, setTimer 
     if (!ready(state)) return false;
     const masks = unchecked(state);
     if (masks.length === 0) return false;
-    const hosts = [...new Set(masks.map((mask) => state.groups[mask].rootHost))];
+    const hosts = [...new Set(masks.map((mask) => rootHostOf(mask, state.groups)))];
     const { request, shifts } = probePlan(state.appliedPac, hosts);
     const outcome = await checker.probe(request);
     const [error] = trialErrors(outcome, { systemPac: state.appliedPac, userPac: state.userPac, shifts });

@@ -3,7 +3,7 @@ import { aggregateGroups, hostIndex, mergeGroups, mergeSeen } from "../core/grou
 import { firstMatch } from "../core/glob.js";
 import { hostFromUrl, isLearnable, isLearnableName, learnedOwner, rootOf, underDeny } from "../core/hosts.js";
 import { reportEndpointHosts } from "../core/reporting.js";
-import { CONFLICT, SAME, answersOf, ownerOf, verdict } from "../core/routes.js";
+import { CONFLICT, SAME, answersOf, claimSites, ownerOf, sitesOfState, verdict } from "../core/routes.js";
 import { NO_LOG } from "./log.js";
 
 const MAX_LOADED = 500;
@@ -59,23 +59,25 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
 
   // What follows from the state alone is worked out once per state: every learned request asks for it.
   const answeredFor = (state) => {
-    if (answered.state !== state) answered = { state, answers: answersOf(state), routes: new Map() };
+    if (answered.state !== state) answered = { state, answers: answersOf(state), sites: sitesOfState(state, state.analysis?.roots ?? [], store.psl), routes: new Map() };
     return answered;
   };
 
   const answersOfState = (state) => answeredFor(state).answers;
 
-  // The group whose proxy carries a learned record, and whether the root may use it (core/routes.js).
+  const sitesOf = (state) => answeredFor(state).sites;
+
+  // The root whose proxy carries a record, the owner of its site, and whether the root may use it (core/routes.js).
   const routeFor = (entry, mask, state) => {
     const { answers, routes } = answeredFor(state);
     return cached(routes, keyOf(mask, entry), () => {
-      const owner = ownerOf(state.groups, indexOf(state.groups).get(entry), entry);
+      const owner = ownerOf(sitesOf(state), entry, store.psl) ?? null;
       return { entry, owner, verdict: verdict(mask, owner, answers) };
     });
   };
 
   // What a root learns for a host it does not know yet. Each root learns every host it needs itself, even one another
-  // root has learned; it then takes that root's record, so every root holding it shares one route.
+  // root has learned; it then takes that root's record, so the groups share records instead of growing combs.
   const targetOf = (host, mask, state) => {
     if (!Object.hasOwn(state.groups, mask)) return null;
     const own = ownIndexOf(state.groups, mask);
@@ -324,8 +326,10 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
       return;
     }
     const batch = accepted.map((source) => [source.host, source]);
+    // A site nobody owns goes to the root that learned it first.
+    const sites = claimSites(sitesOf(state), accepted.map((source) => [source.host, source.mask]), store.psl);
     const { groups, seen: aggregatedSeen } = aggregateGroups(mergeGroups(state.groups, batch, time), nextSeen, state.analysis, store.psl);
-    const next = { ...state, groups, seen: aggregatedSeen, appliedPac: buildSystemPac(state.userPac, groups, store.psl) };
+    const next = { ...state, groups, sites, seen: aggregatedSeen, appliedPac: buildSystemPac(state.userPac, groups, store.psl, sites) };
     await engine.commit(next);
     if (log.on) {
       for (const { host, mask, rootHost, tabId } of accepted) log.add("learned", { host, root: mask, rootHost, tabId });
@@ -473,24 +477,31 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
       if (!learning(state) || host === null) return;
       const { roots, bypass } = state.analysis;
       const index = indexOf(state.groups);
-      const underRoot = rootOf(host, roots) !== null;
-      const learned = underRoot ? null : learnedOwner(host, index, store.psl);
+      const hostRoot = rootOfHost(host, roots);
+      const learned = hostRoot === null ? learnedOwner(host, index, store.psl) : null;
       const tab = details.tabId >= 0 ? tabs.get(details.tabId) : undefined;
       if (tab !== undefined && rootOfHost(tab.host ?? null, roots) !== null) {
-        const via = underRoot ? null : learned !== null ? "proxy" : firstMatch(host, bypass) !== null ? "direct" : undefined;
+        const via = hostRoot !== null ? null : learned !== null ? "proxy" : firstMatch(host, bypass) !== null ? "direct" : undefined;
         if (via !== undefined) track(details, { host, via, navigation: tab.navigation });
       }
-      if (underRoot) return;
       const source = attribute(details, roots);
       if (source === null) {
         if (learned !== null) observe(learned, index.get(learned));
+        return;
+      }
+      // A root's domain is never learned: every root's pages may use it while its site goes through their proxy, and
+      // are blocked from it otherwise, the root's own pages included once it has handed its site over.
+      if (hostRoot !== null) {
+        const route = routeFor(hostRoot, source.mask, state);
+        if (route.verdict === CONFLICT) markConflict(source, route, state);
+        else if (route.verdict !== SAME && current(source.tabId, source.navigation)) markIncomplete(source.tabId);
         return;
       }
       // A root's own records are among all the records, so a host no root knows is new to this root too.
       const own = learned === null ? null : learnedOwner(host, ownIndexOf(state.groups, source.mask), store.psl);
       if (own !== null) {
         observe(own, [source.mask]);
-        const route = routeFor(learned, source.mask, state);
+        const route = routeFor(own, source.mask, state);
         if (route.verdict === CONFLICT) markConflict(source, route, state);
         else if (route.verdict !== SAME && current(source.tabId, source.navigation)) markIncomplete(source.tabId);
         return;

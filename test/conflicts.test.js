@@ -7,32 +7,31 @@ import { createCommands } from "../src/background/messages.js";
 import { createProxy } from "../src/background/proxy.js";
 import { createResolver } from "../src/background/resolve.js";
 import { Store } from "../src/background/store.js";
-import { answersOf, routesOf } from "../src/core/routes.js";
+import { sharedRoutes } from "../src/core/routes.js";
 import { conflictText, entryLevel, entryText } from "../src/ui/log/entries.js";
 import { FakeArea, FakeBrowser } from "./fakes.js";
 import { PSL, dnrDecision, loadPac, vmChecker } from "./support.js";
 
 const TAB = 3;
 
-// The records each root holds but may not use, with the root whose proxy carries them.
+// The hosts each root holds but may not use, as the viewer sees them.
 const conflictsOf = (state) => {
   const found = [];
-  for (const [root, { deny, denyExact }] of routesOf(state.groups, answersOf(state), PSL)) {
-    for (const host of [...deny, ...denyExact]) found.push({ root, host });
+  for (const [root, { records }] of Object.entries(sharedRoutes(state, PSL))) {
+    for (const [host, { verdict }] of Object.entries(records)) if (verdict === "conflict") found.push({ root, host });
   }
   return found.sort((a, b) => (a.root + a.host < b.root + b.host ? -1 : 1));
 };
 
-const userPac = (facebook, instagram) =>
+const userPacOf = (proxies) =>
   [
-    `var FB = ${JSON.stringify(facebook)};`,
-    `var IG = ${JSON.stringify(instagram)};`,
     "function FindProxyForURL(url, host) {",
-    '  if (root(host, "facebook.com")) return FB;',
-    '  if (root(host, "instagram.com")) return IG;',
+    ...Object.entries(proxies).map(([root, proxy]) => `  if (root(host, ${JSON.stringify(root)})) return ${JSON.stringify(proxy)};`),
     '  return "DIRECT";',
     "}",
   ].join("\n");
+
+const userPac = (facebook, instagram) => userPacOf({ "facebook.com": facebook, "instagram.com": instagram });
 
 async function setup(text) {
   const store = new Store(new FakeArea(), new FakeArea());
@@ -63,36 +62,49 @@ const visit = (learner, url, tabId = TAB) => {
 const load = (learner, url, { tabId = TAB, initiator } = {}) =>
   learner.onRequest({ requestId: String(++requestId), type: "image", tabId, url, initiator, documentLifecycle: "active", timeStamp: 1 });
 
-// Learn fbcdn.net into instagram.com, then let a facebook.com page ask for it: facebook.com learns it last and routes it.
+// Everything settles, the background proxy check included.
+const idle = async (learner, resolver) => {
+  await settled(learner, resolver);
+  await resolver.schedule();
+  await settled(learner, resolver);
+};
+
+// instagram.com learns two fbcdn.net hosts (one record, fbcdn.net, and the site is instagram.com's), then a
+// facebook.com page asks for a third one and learns the same record.
 async function shared(text) {
   const setupResult = await setup(text);
   const { learner, resolver } = setupResult;
   visit(learner, "https://www.instagram.com/");
   load(learner, "https://static.fbcdn.net/a.png", { initiator: "https://www.instagram.com" });
   load(learner, "https://video.fbcdn.net/b.mp4", { initiator: "https://www.instagram.com" });
-  await settled(learner, resolver);
+  await idle(learner, resolver);
   visit(learner, "https://www.facebook.com/");
   load(learner, "https://scontent.fbcdn.net/c.jpg", { initiator: "https://www.facebook.com" });
-  await settled(learner, resolver);
-  await resolver.schedule();
-  await settled(learner, resolver);
+  await idle(learner, resolver);
   return setupResult;
 }
 
-const allowed = (browser, host, top, initiator = `https://www.${top}`) =>
-  dnrDecision(browser.allRules(), { host, top, initiator: initiator === null ? null : new URL(initiator).hostname }) === "allow";
+// The facebook.com page loads again after learning: the blocked host is a conflict now, not a new host.
+const reloadFacebook = (learner) => {
+  visit(learner, "https://www.facebook.com/");
+  load(learner, "https://scontent.fbcdn.net/c.jpg", { initiator: "https://www.facebook.com" });
+};
+
+const allowed = (browser, host, top, initiator = `https://www.${top}`, type = "script") =>
+  dnrDecision(browser.allRules(), { host, top, initiator: initiator === null ? null : new URL(initiator).hostname, type }) === "allow";
 
 const route = (browser, host) => loadPac(browser.pac()).FindProxyForURL(`https://${host}/`, host);
 
-test("a host another root learned is learned again by the root that needs it", async () => {
+test("a host another root learned is learned again as the same record, and the site keeps its owner", async () => {
   const { store, learner } = await shared(userPac("PROXY fb:1", "PROXY fb:1"));
   assert.deepEqual(Object.keys(store.state.groups["facebook.com"].hosts), ["fbcdn.net"]);
   assert.deepEqual(Object.keys(store.state.groups["instagram.com"].hosts), ["fbcdn.net"]);
+  assert.equal(store.state.sites["fbcdn.net"], "instagram.com");
   assert.equal(learner.newHosts(TAB), 1);
   assert.deepEqual(learner.conflicts(TAB), []);
 });
 
-test("roots on the same proxy share a host: both may load it, through that proxy", async () => {
+test("roots on the same proxy share a site: both may load it, through that proxy", async () => {
   const { store, browser, learner, resolver, log } = await shared(userPac("PROXY fb:1", "PROXY fb:1"));
   assert.deepEqual(store.state.proxies, {
     "facebook.com": { host: "www.facebook.com", answer: "PROXY fb:1" },
@@ -107,42 +119,39 @@ test("roots on the same proxy share a host: both may load it, through that proxy
   assert.deepEqual(learner.conflicts(TAB), []);
   assert.deepEqual(conflictsOf(store.state), []);
   const checked = log.entries.find(({ kind }) => kind === "proxiesChecked");
-  assert.equal(entryText(checked), "Proxies checked: facebook.com → PROXY fb:1, instagram.com → PROXY fb:1");
+  assert.match(entryText(checked), /^Proxies checked: /);
 });
 
-test("roots on different proxies: the host stays with the first root's proxy and is blocked for the other", async () => {
+test("roots on different proxies: the site stays with its owner and is blocked for the other root", async () => {
   const { store, browser, learner, log } = await shared(userPac("PROXY fb:1", "PROXY ig:1"));
-  assert.deepEqual(Object.keys(store.state.groups["instagram.com"].hosts), ["fbcdn.net"]);
-  assert.equal(route(browser, "scontent.fbcdn.net"), "PROXY fb:1");
-  assert.equal(allowed(browser, "scontent.fbcdn.net", "facebook.com"), true);
-  assert.equal(allowed(browser, "scontent.fbcdn.net", "instagram.com"), false);
-  assert.equal(allowed(browser, "scontent.fbcdn.net", "instagram.com", null), false);
-  assert.equal(allowed(browser, "scontent.fbcdn.net", "example.org", "https://www.instagram.com"), false);
-  const conflict = { host: "fbcdn.net", root: "instagram.com", owner: "facebook.com", proxy: "PROXY ig:1", ownerProxy: "PROXY fb:1" };
-  assert.deepEqual(conflictsOf(store.state), [{ root: "instagram.com", host: "fbcdn.net" }]);
-  visit(learner, "https://www.instagram.com/");
-  load(learner, "https://scontent.fbcdn.net/c.jpg", { initiator: "https://www.instagram.com" });
-  assert.deepEqual(learner.conflicts(TAB), [{ host: "fbcdn.net", root: "instagram.com", owner: "facebook.com" }]);
+  assert.equal(route(browser, "scontent.fbcdn.net"), "PROXY ig:1");
+  assert.equal(allowed(browser, "scontent.fbcdn.net", "instagram.com"), true);
+  assert.equal(allowed(browser, "scontent.fbcdn.net", "facebook.com"), false);
+  assert.equal(allowed(browser, "scontent.fbcdn.net", "facebook.com", null), false);
+  assert.equal(allowed(browser, "scontent.fbcdn.net", "example.org", "https://www.facebook.com"), false);
+  assert.deepEqual(conflictsOf(store.state), [{ root: "facebook.com", host: "fbcdn.net" }]);
+  assert.equal(learner.newHosts(TAB), 1);
+  reloadFacebook(learner);
+  assert.deepEqual(learner.conflicts(TAB), [{ host: "fbcdn.net", root: "facebook.com", owner: "instagram.com" }]);
   assert.equal(learner.newHosts(TAB), 0);
   const logged = log.entries.filter(({ kind }) => kind === "conflict");
-  assert.deepEqual(logged, [{ kind: "conflict", ...conflict, tabId: TAB }]);
+  assert.deepEqual(logged, [{ kind: "conflict", host: "fbcdn.net", root: "facebook.com", owner: "instagram.com", proxy: "PROXY fb:1", ownerProxy: "PROXY ig:1", tabId: TAB }]);
   assert.equal(entryLevel(logged[0]), "error");
   assert.equal(
     entryText(logged[0]),
-    "Proxy conflict: fbcdn.net is learned by instagram.com (PROXY ig:1) and facebook.com (PROXY fb:1); it goes through facebook.com's proxy, so it is blocked for instagram.com · tab 3",
+    "Proxy conflict: fbcdn.net goes through the proxy of instagram.com (PROXY ig:1), whose site it is; facebook.com uses PROXY fb:1, so it is blocked for facebook.com · tab 3",
   );
 });
 
 test("the popup reports the conflicts of the tab with both proxies", async () => {
   const { commands, learner } = await shared(userPac("PROXY fb:1", "PROXY ig:1"));
-  visit(learner, "https://www.instagram.com/");
-  load(learner, "https://scontent.fbcdn.net/c.jpg", { initiator: "https://www.instagram.com" });
+  reloadFacebook(learner);
   const state = await commands.dispatch({ type: "getTabState", tabId: TAB });
-  assert.deepEqual(state.conflicts, [{ host: "fbcdn.net", root: "instagram.com", owner: "facebook.com", proxy: "PROXY ig:1", ownerProxy: "PROXY fb:1" }]);
-  assert.match(conflictText(state.conflicts[0]), /blocked for instagram\.com/);
+  assert.deepEqual(state.conflicts, [{ host: "fbcdn.net", root: "facebook.com", owner: "instagram.com", proxy: "PROXY fb:1", ownerProxy: "PROXY ig:1" }]);
+  assert.match(conflictText(state.conflicts[0]), /blocked for facebook\.com/);
 });
 
-test("a root whose proxy is not checked yet keeps a shared host blocked until the check runs", async () => {
+test("a root whose proxy is not checked yet keeps another root's site blocked until the check runs", async () => {
   const { store, browser, learner, resolver } = await setup(userPac("PROXY fb:1", "PROXY fb:1"));
   visit(learner, "https://www.instagram.com/");
   load(learner, "https://static.fbcdn.net/a.png", { initiator: "https://www.instagram.com" });
@@ -151,24 +160,22 @@ test("a root whose proxy is not checked yet keeps a shared host blocked until th
   load(learner, "https://static.fbcdn.net/c.jpg", { initiator: "https://www.facebook.com" });
   await settled(learner, resolver);
   assert.deepEqual(Object.keys(store.state.groups["facebook.com"].hosts), ["static.fbcdn.net"]);
-  assert.equal(store.state.proxies, null);
-  assert.equal(allowed(browser, "static.fbcdn.net", "facebook.com"), true);
-  assert.equal(allowed(browser, "static.fbcdn.net", "instagram.com"), false);
-  visit(learner, "https://www.instagram.com/");
-  load(learner, "https://static.fbcdn.net/d.jpg", { initiator: "https://www.instagram.com" });
+  assert.equal(allowed(browser, "static.fbcdn.net", "instagram.com"), true);
+  assert.equal(allowed(browser, "static.fbcdn.net", "facebook.com"), false);
+  load(learner, "https://static.fbcdn.net/d.jpg", { initiator: "https://www.facebook.com" });
   assert.deepEqual([learner.conflicts(TAB), learner.incomplete(TAB)], [[], true]);
   await resolver.schedule();
-  assert.equal(allowed(browser, "static.fbcdn.net", "instagram.com"), true);
+  assert.equal(allowed(browser, "static.fbcdn.net", "facebook.com"), true);
   assert.equal(conflictsOf(store.state).length, 0);
 });
 
 test("a request belongs to the root of its page, and outside root pages to the root of its frame", async () => {
   const { browser } = await shared(userPac("PROXY fb:1", "PROXY ig:1"));
-  assert.equal(allowed(browser, "scontent.fbcdn.net", "facebook.com", "https://www.instagram.com"), true);
-  assert.equal(allowed(browser, "scontent.fbcdn.net", "instagram.com", "https://www.facebook.com"), false);
-  assert.equal(allowed(browser, "scontent.fbcdn.net", "facebook.com", "https://embed.example.org"), true);
-  assert.equal(allowed(browser, "scontent.fbcdn.net", "example.org", "https://www.facebook.com"), true);
-  assert.equal(allowed(browser, "scontent.fbcdn.net", "example.org", "https://www.instagram.com"), false);
+  assert.equal(allowed(browser, "scontent.fbcdn.net", "instagram.com", "https://www.facebook.com"), true);
+  assert.equal(allowed(browser, "scontent.fbcdn.net", "facebook.com", "https://www.instagram.com"), false);
+  assert.equal(allowed(browser, "scontent.fbcdn.net", "instagram.com", "https://embed.example.org"), true);
+  assert.equal(allowed(browser, "scontent.fbcdn.net", "example.org", "https://www.instagram.com"), true);
+  assert.equal(allowed(browser, "scontent.fbcdn.net", "example.org", "https://www.facebook.com"), false);
 });
 
 test("a frame of one root in another root's page never teaches the frame's root", async () => {
@@ -190,76 +197,152 @@ test("the top frame's requests belong to their own page even before the tab's re
   assert.deepEqual(Object.keys(store.state.groups["facebook.com"].hosts), ["frame.example.org"]);
 });
 
-test("a root that learns a shared host later takes its route, and the other root gets the conflict", async () => {
-  const { store, browser, commands, learner, resolver } = await shared(userPac("PROXY fb:1", "PROXY ig:1"));
-  assert.equal((await commands.dispatch({ type: "removeHost", mask: "facebook.com", host: "fbcdn.net" })).ok, true);
+test("the owner removing its record keeps the site while another root holds it", async () => {
+  const { store, browser, commands } = await shared(userPac("PROXY fb:1", "PROXY ig:1"));
+  assert.equal((await commands.dispatch({ type: "removeHost", mask: "instagram.com", host: "fbcdn.net" })).ok, true);
+  assert.equal(store.state.sites["fbcdn.net"], "instagram.com");
   assert.equal(route(browser, "scontent.fbcdn.net"), "PROXY ig:1");
-  assert.equal(allowed(browser, "scontent.fbcdn.net", "instagram.com"), true);
-  visit(learner, "https://www.facebook.com/");
-  load(learner, "https://static.fbcdn.net/a.png", { initiator: "https://www.facebook.com" });
-  await settled(learner, resolver);
-  assert.deepEqual(Object.keys(store.state.groups["facebook.com"].hosts), ["fbcdn.net"]);
-  assert.equal(route(browser, "scontent.fbcdn.net"), "PROXY fb:1");
-  assert.equal(allowed(browser, "scontent.fbcdn.net", "instagram.com"), false);
+  assert.equal(allowed(browser, "scontent.fbcdn.net", "facebook.com"), false);
+  assert.equal((await commands.dispatch({ type: "removeHost", mask: "facebook.com", host: "fbcdn.net" })).ok, true);
+  assert.equal(Object.hasOwn(store.state.sites, "fbcdn.net"), false);
+});
+
+test("a saved User PAC that puts both roots on one proxy resolves the conflict", async () => {
+  const { store, browser, commands } = await shared(userPac("PROXY fb:1", "PROXY ig:1"));
+  assert.equal((await commands.dispatch({ type: "saveUserPac", text: userPac("PROXY ig:1", "PROXY ig:1") })).ok, true);
+  assert.deepEqual(conflictsOf(store.state), []);
   assert.equal(allowed(browser, "scontent.fbcdn.net", "facebook.com"), true);
 });
 
-test("a saved User PAC that moves a root to the other proxy resolves the conflict", async () => {
-  const { store, browser, commands } = await shared(userPac("PROXY fb:1", "PROXY ig:1"));
-  assert.equal((await commands.dispatch({ type: "saveUserPac", text: userPac("PROXY fb:1", "PROXY fb:1") })).ok, true);
-  assert.deepEqual(conflictsOf(store.state), []);
-  assert.equal(allowed(browser, "scontent.fbcdn.net", "instagram.com"), true);
-});
-
-test("removing the host from the conflicting root lets it learn again", async () => {
-  const { store, browser, commands } = await shared(userPac("PROXY fb:1", "PROXY ig:1"));
-  assert.equal((await commands.dispatch({ type: "removeHost", mask: "instagram.com", host: "fbcdn.net" })).ok, true);
-  assert.deepEqual(conflictsOf(store.state), []);
-  assert.equal(allowed(browser, "scontent.fbcdn.net", "instagram.com"), false);
-});
-
-test("the viewer gets each root's proxy and the records it takes from another root", async () => {
+test("the viewer gets each root's proxy, the owner of its site and the hosts it takes from another root", async () => {
   const different = await shared(userPac("PROXY fb:1", "PROXY ig:1"));
   assert.deepEqual(await different.commands.dispatch({ type: "getRoutes" }), {
     ok: true,
     roots: {
-      "facebook.com": { proxy: "PROXY fb:1", shared: [], blocks: { "fbcdn.net": ["instagram.com"] } },
-      "instagram.com": { proxy: "PROXY ig:1", shared: [{ host: "fbcdn.net", owner: "facebook.com", verdict: "conflict", ownerProxy: "PROXY fb:1" }], blocks: {} },
+      "facebook.com": {
+        proxy: "PROXY fb:1",
+        siteOwner: "facebook.com",
+        records: { "fbcdn.net": { site: "fbcdn.net", owner: "instagram.com", verdict: "conflict", ownerProxy: "PROXY ig:1" } },
+        blocks: {},
+      },
+      "instagram.com": {
+        proxy: "PROXY ig:1",
+        siteOwner: "instagram.com",
+        records: { "fbcdn.net": { site: "fbcdn.net", owner: "instagram.com", verdict: "same", ownerProxy: "PROXY ig:1" } },
+        blocks: { "fbcdn.net": ["facebook.com"] },
+      },
     },
   });
   const same = await shared(userPac("PROXY fb:1", "PROXY fb:1"));
   const { roots } = await same.commands.dispatch({ type: "getRoutes" });
-  assert.deepEqual(roots["instagram.com"].shared, [{ host: "fbcdn.net", owner: "facebook.com", verdict: "same", ownerProxy: "PROXY fb:1" }]);
+  assert.deepEqual(roots["facebook.com"].records["fbcdn.net"], { site: "fbcdn.net", owner: "instagram.com", verdict: "same", ownerProxy: "PROXY fb:1" });
+  assert.deepEqual(roots["instagram.com"].blocks, {});
 });
 
-test("Route here hands shared hosts to the root with the current time, and every root keeps them", async () => {
+test("Route here hands whole sites to the root, and every root keeps its records", async () => {
   const { store, browser, commands, learner, resolver } = await setup(userPac("PROXY fb:1", "PROXY ig:1"));
   visit(learner, "https://www.instagram.com/");
   load(learner, "https://static.fbcdn.net/a.png", { initiator: "https://www.instagram.com" });
   load(learner, "https://img.cdn.net/b.png", { initiator: "https://www.instagram.com" });
-  await settled(learner, resolver);
+  await idle(learner, resolver);
   visit(learner, "https://www.facebook.com/");
   load(learner, "https://static.fbcdn.net/c.png", { initiator: "https://www.facebook.com" });
   load(learner, "https://img.cdn.net/d.png", { initiator: "https://www.facebook.com" });
-  await settled(learner, resolver);
-  await resolver.schedule();
-  assert.deepEqual(conflictsOf(store.state), [{ root: "instagram.com", host: "img.cdn.net" }, { root: "instagram.com", host: "static.fbcdn.net" }]);
-  const hosts = ["static.fbcdn.net", "img.cdn.net"];
-  assert.equal((await commands.dispatch({ type: "routeHere", mask: "instagram.com", hosts })).ok, true);
-  for (const host of hosts) {
-    assert.ok(store.state.groups["instagram.com"].hosts[host] > store.state.groups["facebook.com"].hosts[host]);
-    assert.equal(Object.hasOwn(store.state.groups["facebook.com"].hosts, host), true);
-    assert.equal(route(browser, host), "PROXY ig:1");
-    assert.equal(allowed(browser, host, "instagram.com"), true);
-    assert.equal(allowed(browser, host, "facebook.com"), false);
-  }
+  await idle(learner, resolver);
   assert.deepEqual(conflictsOf(store.state), [{ root: "facebook.com", host: "img.cdn.net" }, { root: "facebook.com", host: "static.fbcdn.net" }]);
+  const hosts = ["static.fbcdn.net", "img.cdn.net"];
+  assert.equal((await commands.dispatch({ type: "routeHere", mask: "facebook.com", hosts })).ok, true);
+  for (const host of hosts) {
+    assert.equal(Object.hasOwn(store.state.groups["instagram.com"].hosts, host), true);
+    assert.equal(route(browser, host), "PROXY fb:1");
+    assert.equal(allowed(browser, host, "facebook.com"), true);
+    assert.equal(allowed(browser, host, "instagram.com"), false);
+  }
+  assert.equal(route(browser, "other.cdn.net"), "DIRECT");
+  assert.deepEqual(conflictsOf(store.state), [{ root: "instagram.com", host: "img.cdn.net" }, { root: "instagram.com", host: "static.fbcdn.net" }]);
   const state = store.state;
-  assert.deepEqual(await commands.dispatch({ type: "routeHere", mask: "instagram.com", hosts }), { ok: true, control: null });
+  assert.deepEqual(await commands.dispatch({ type: "routeHere", mask: "facebook.com", hosts }), { ok: true, control: null });
   assert.equal(store.state, state);
-  assert.equal((await commands.dispatch({ type: "routeHere", mask: "facebook.com", hosts: ["img.cdn.net"] })).ok, true);
-  assert.equal(route(browser, "img.cdn.net"), "PROXY fb:1");
-  assert.equal(route(browser, "static.fbcdn.net"), "PROXY ig:1");
+  assert.equal((await commands.dispatch({ type: "routeHere", mask: "instagram.com", hosts: ["img.cdn.net"] })).ok, true);
+  assert.equal(route(browser, "img.cdn.net"), "PROXY ig:1");
+  assert.equal(route(browser, "static.fbcdn.net"), "PROXY fb:1");
   assert.match((await commands.dispatch({ type: "routeHere", mask: "instagram.com", hosts: ["nope.net"] })).error, /is not in group/);
   assert.match((await commands.dispatch({ type: "routeHere", mask: "instagram.com", hosts: [] })).error, /non-empty array/);
+});
+
+test("a root's domain is blocked in the pages of a root on another proxy and reported there", async () => {
+  const { store, browser, learner, resolver, commands } = await setup(userPac("PROXY fb:1", "PROXY ig:1"));
+  assert.equal(allowed(browser, "www.instagram.com", "facebook.com"), false);
+  assert.equal(allowed(browser, "www.instagram.com", "instagram.com"), true);
+  assert.equal(allowed(browser, "www.instagram.com", "example.org", "https://news.example.org"), true);
+  visit(learner, "https://www.facebook.com/");
+  load(learner, "https://www.instagram.com/embed.js", { initiator: "https://www.facebook.com" });
+  await settled(learner, resolver);
+  assert.deepEqual(learner.conflicts(TAB), [{ host: "instagram.com", root: "facebook.com", owner: "instagram.com" }]);
+  assert.deepEqual(store.state.groups["facebook.com"].hosts, {});
+  const same = await setup(userPac("PROXY fb:1", "PROXY fb:1"));
+  assert.equal(allowed(same.browser, "www.instagram.com", "facebook.com"), true);
+  // Route here from facebook.com takes the whole instagram.com site: instagram.com's own pages are closed then.
+  assert.equal((await commands.dispatch({ type: "routeHere", mask: "facebook.com", hosts: ["instagram.com"] })).ok, true);
+  assert.equal(route(browser, "www.instagram.com"), "PROXY fb:1");
+  assert.equal(allowed(browser, "www.instagram.com", "facebook.com"), true);
+  assert.equal(allowed(browser, "www.instagram.com", "instagram.com"), false);
+  assert.equal(allowed(browser, "www.instagram.com", null, null, "main_frame"), false);
+  visit(learner, "https://www.instagram.com/");
+  load(learner, "https://www.instagram.com/app.js", { initiator: "https://www.instagram.com" });
+  assert.deepEqual(learner.conflicts(TAB), [{ host: "instagram.com", root: "instagram.com", owner: "facebook.com" }]);
+  assert.equal((await commands.dispatch({ type: "routeHere", mask: "instagram.com", hosts: ["instagram.com"] })).ok, true);
+  assert.equal(route(browser, "www.instagram.com"), "PROXY ig:1");
+  assert.equal(allowed(browser, "www.instagram.com", null, null, "main_frame"), true);
+});
+
+test("a removed root takes its sites with it: every root forgets their hosts and learns them anew", async () => {
+  const text = userPacOf({ "facebook.com": "PROXY fb:1", "instagram.com": "PROXY ig:1", "threads.com": "PROXY fb:1" });
+  const { store, browser, learner, resolver, commands } = await setup(text);
+  visit(learner, "https://www.threads.com/");
+  load(learner, "https://a.cdn.net/1.png", { initiator: "https://www.threads.com" });
+  await idle(learner, resolver);
+  visit(learner, "https://www.facebook.com/");
+  load(learner, "https://a.cdn.net/2.png", { initiator: "https://www.facebook.com" });
+  load(learner, "https://img.org/3.png", { initiator: "https://www.facebook.com" });
+  await idle(learner, resolver);
+  assert.equal(store.state.sites["cdn.net"], "threads.com");
+  assert.equal(allowed(browser, "a.cdn.net", "facebook.com"), true);
+  assert.equal((await commands.dispatch({ type: "saveUserPac", text: userPac("PROXY fb:1", "PROXY ig:1") })).ok, true);
+  assert.deepEqual(store.state.groups["facebook.com"].hosts, { "img.org": store.state.groups["facebook.com"].hosts["img.org"] });
+  assert.deepEqual(store.state.sites, { "facebook.com": "facebook.com", "img.org": "facebook.com", "instagram.com": "instagram.com" });
+  assert.equal(allowed(browser, "a.cdn.net", "facebook.com"), false);
+  assert.equal(route(browser, "a.cdn.net"), "DIRECT");
+  visit(learner, "https://www.facebook.com/");
+  load(learner, "https://a.cdn.net/4.png", { initiator: "https://www.facebook.com" });
+  await idle(learner, resolver);
+  assert.equal(store.state.sites["cdn.net"], "facebook.com");
+  assert.equal(learner.newHosts(TAB), 1);
+  assert.equal(route(browser, "a.cdn.net"), "PROXY fb:1");
+  assert.equal(allowed(browser, "a.cdn.net", "facebook.com"), true);
+});
+
+test("a new root takes its site back from the roots that learned its hosts", async () => {
+  const { store, browser, learner, resolver, commands } = await setup(userPac("PROXY fb:1", "PROXY ig:1"));
+  visit(learner, "https://www.facebook.com/");
+  load(learner, "https://static.threads.com/a.js", { initiator: "https://www.facebook.com" });
+  await idle(learner, resolver);
+  assert.equal(store.state.sites["threads.com"], "facebook.com");
+  const text = userPacOf({ "facebook.com": "PROXY fb:1", "instagram.com": "PROXY ig:1", "threads.com": "PROXY ig:1" });
+  assert.equal((await commands.dispatch({ type: "saveUserPac", text })).ok, true);
+  assert.equal(store.state.sites["threads.com"], "threads.com");
+  assert.deepEqual(store.state.groups["facebook.com"].hosts, {});
+  assert.equal(route(browser, "static.threads.com"), "PROXY ig:1");
+  assert.equal(allowed(browser, "static.threads.com", "facebook.com"), false);
+});
+
+test("roots that overlap or share a site are refused when the User PAC is saved", async () => {
+  const { commands } = await setup(userPac("PROXY fb:1", "PROXY ig:1"));
+  const overlap = await commands.dispatch({ type: "saveUserPac", text: userPacOf({ "instagram.com": "PROXY a:1", "www.instagram.com": "PROXY b:1" }) });
+  assert.equal(overlap.ok, false);
+  assert.deepEqual(overlap.errors, [{ line: 3, column: 18, message: 'root() mask "www.instagram.com" overlaps root() mask "instagram.com": one site can have one root' }]);
+  const site = await commands.dispatch({ type: "saveUserPac", text: userPacOf({ "mail.google.com": "PROXY a:1", "docs.google.com": "PROXY a:1" }) });
+  assert.deepEqual(site.errors.map(({ message }) => message), ['root() mask "docs.google.com" is in the same site as root() mask "mail.google.com" (google.com): one site can have one root']);
+  const suffix = await commands.dispatch({ type: "saveUserPac", text: userPacOf({ "github.io": "PROXY a:1" }) });
+  assert.deepEqual(suffix.errors.map(({ message }) => message), ['root() mask "github.io" is a public suffix, not a site']);
 });

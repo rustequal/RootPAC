@@ -1,8 +1,9 @@
 import { analyzeUserPac } from "./analyze.js";
 
-export const BACKUP_SCHEMA_VERSION = 1;
+// Schema 2 adds the owner of each site (core/routes.js); schema 1 backups are read without owners.
+export const BACKUP_SCHEMA_VERSION = 2;
 
-const BACKUP_KEYS = ["groups", "schemaVersion", "userPac"];
+const BACKUP_KEYS = { 1: ["groups", "schemaVersion", "userPac"], 2: ["groups", "schemaVersion", "sites", "userPac"] };
 const GROUP_KEYS = ["hosts", "rootHost"];
 
 function isPlainObject(value) {
@@ -14,7 +15,7 @@ function hasExactKeys(value, keys) {
   return own.length === keys.length && own.every((key, index) => key === keys[index]);
 }
 
-export function exportBackup({ userPac, groups }) {
+export function exportBackup({ userPac, groups, sites }) {
   if (userPac === null) throw new Error("No user PAC configured");
   return {
     schemaVersion: BACKUP_SCHEMA_VERSION,
@@ -22,6 +23,7 @@ export function exportBackup({ userPac, groups }) {
     groups: Object.fromEntries(
       Object.entries(groups).map(([mask, { rootHost, hosts }]) => [mask, { rootHost, hosts: { ...hosts } }]),
     ),
+    sites: { ...(sites ?? {}) },
   };
 }
 
@@ -41,18 +43,20 @@ function readGroup(mask, group) {
   return { rootHost: group.rootHost, hosts };
 }
 
-export function readBackup(backup) {
-  if (!isPlainObject(backup) || !hasExactKeys(backup, BACKUP_KEYS)) {
-    throw new Error("Backup must have exactly schemaVersion, userPac and groups");
-  }
-  if (backup.schemaVersion !== BACKUP_SCHEMA_VERSION) {
-    throw new Error(`Unsupported backup schema version ${JSON.stringify(backup.schemaVersion)}`);
+export function readBackup(backup, psl = null) {
+  if (!isPlainObject(backup)) throw new Error("Backup must be an object");
+  const keys = Object.hasOwn(BACKUP_KEYS, backup.schemaVersion) ? BACKUP_KEYS[backup.schemaVersion] : null;
+  if (keys === null) throw new Error(`Unsupported backup schema version ${JSON.stringify(backup.schemaVersion)}`);
+  if (!hasExactKeys(backup, keys)) throw new Error(`Backup must have exactly ${keys.join(", ")}`);
+  const sites = backup.schemaVersion === 1 ? null : backup.sites;
+  if (sites !== null && !(isPlainObject(sites) && Object.values(sites).every((mask) => typeof mask === "string"))) {
+    throw new Error("Backup sites must map sites to roots");
   }
   if (typeof backup.userPac !== "string") throw new Error("Backup userPac must be a string");
   if (!isPlainObject(backup.groups)) throw new Error("Backup groups must be an object");
-  const result = analyzeUserPac(backup.userPac);
+  const result = analyzeUserPac(backup.userPac, psl);
   if (!result.ok) return { ok: false, errors: result.errors };
   const groups = {};
   for (const [mask, group] of Object.entries(backup.groups)) groups[mask] = readGroup(mask, group);
-  return { ok: true, userPac: backup.userPac, analysis: { roots: result.roots, deny: result.deny, bypass: result.bypass }, groups };
+  return { ok: true, userPac: backup.userPac, analysis: { roots: result.roots, deny: result.deny, bypass: result.bypass }, groups, sites: sites === null ? null : { ...sites } };
 }

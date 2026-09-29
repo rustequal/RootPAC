@@ -11,9 +11,10 @@ const errorBox = document.getElementById("error");
 let state = { appliedPac: "", groups: new Map(), seen: new Map(), routes: {} };
 const open = new Set();
 
-// Which proxy a host goes through for this root: its own, another root's that is the same, or another root's that is
-// not, in which case the host is blocked for this root (a proxy conflict) and Route here hands it to this root.
-function routeCell({ owner, verdict, ownerProxy } = {}, blocked = [], routeHere = null) {
+// Which proxy a host goes through for this root. Every host of a site goes through the proxy of the root that owns the
+// site: this root, another root on the same proxy, or another root on a different proxy, in which case the host is
+// blocked here (a proxy conflict) and Route here hands the site to this root.
+function routeCell(mask, { site, owner, verdict, ownerProxy }, blocked = [], routeHere = null) {
   const cell = element("td");
   const box = element("div", "route");
   const status = element("div", "status");
@@ -21,10 +22,10 @@ function routeCell({ owner, verdict, ownerProxy } = {}, blocked = [], routeHere 
     status.append(element("div", className, text));
     for (const detail of details) status.append(element("div", "detail", detail));
   };
-  if (owner === undefined && blocked.length > 0) {
+  if (owner === mask && blocked.length > 0) {
     line("warn", "own proxy", `blocked for ${blocked.join(", ")}`);
-    status.title = `A proxy conflict: ${blocked.join(", ")} learned this host too, but it goes through this root's proxy. Route here in the other group hands it over.`;
-  } else if (owner === undefined) {
+    status.title = `A proxy conflict: ${blocked.join(", ")} learned hosts of ${site} too, but the site goes through this root's proxy. Route here in their group hands it over.`;
+  } else if (owner === mask) {
     line("muted", "own proxy");
   } else if (verdict === "same") {
     line("muted", `same proxy as ${owner}`);
@@ -32,12 +33,12 @@ function routeCell({ owner, verdict, ownerProxy } = {}, blocked = [], routeHere 
     line("warn", "blocked here", `via ${owner}`, "proxies not checked yet");
   } else {
     line("error", "blocked here", `via ${owner}`, ...(ownerProxy === null ? [] : [ownerProxy]));
-    status.title = `A proxy conflict: the host goes through the proxy of ${owner}, so it is blocked for this root.`;
+    status.title = `A proxy conflict: ${site} goes through the proxy of ${owner}, so it is blocked for this root. Route here hands the whole site to this root.`;
   }
   box.append(status);
   if (verdict === "conflict" && routeHere !== null) {
     const button = element("button", "small", "Route here");
-    button.title = `Send this host through this root's proxy; ${owner} keeps it, blocked, until you route it back`;
+    button.title = `Send every host of ${site} through this root's proxy; ${owner} keeps its hosts, blocked, until you route the site back`;
     button.addEventListener("click", () => routeHere(button));
     box.append(button);
   }
@@ -59,20 +60,20 @@ async function run(button, message) {
 }
 
 function blockedCount(route) {
-  return route?.shared.filter(({ verdict }) => verdict === "conflict").length ?? 0;
+  return Object.values(route?.records ?? {}).filter(({ verdict }) => verdict === "conflict").length;
 }
 
 function hostRows(mask, hosts, seen, needle, route) {
-  const shared = new Map((route?.shared ?? []).map((item) => [item.host, item]));
   const table = element("table", "hosts");
   const head = element("tr");
   for (const label of ["Host", "Route", "Learned", "Last seen", ""]) head.append(element("th", undefined, label));
   table.append(head);
   for (const host of Object.keys(hosts).sort()) {
     if (needle !== "" && !host.includes(needle)) continue;
+    const record = route?.records[host] ?? { site: host, owner: mask, verdict: "same", ownerProxy: null };
     const row = element("tr");
     row.append(element("td", "host", host));
-    row.append(routeCell(shared.get(host), route?.blocks[host], (button) => run(button, { type: "routeHere", mask, hosts: [host] })));
+    row.append(routeCell(mask, record, route?.blocks[record.site], (button) => run(button, { type: "routeHere", mask, hosts: [host] })));
     row.append(element("td", "muted", formatTime(hosts[host])));
     row.append(element("td", "muted", seen[host] === undefined ? "—" : formatTime(seen[host])));
     const cell = element("td");
@@ -80,16 +81,6 @@ function hostRows(mask, hosts, seen, needle, route) {
     remove.addEventListener("click", () => run(remove, { type: "removeHost", mask, host }));
     cell.append(remove);
     row.append(cell);
-    table.append(row);
-  }
-  // Records of other roots under this root's records decide the route of the names under them, and are blocked here
-  // when their proxy differs.
-  for (const item of route?.shared ?? []) {
-    if (Object.hasOwn(hosts, item.host) || item.verdict === "same" || (needle !== "" && !item.host.includes(needle))) continue;
-    const row = element("tr");
-    const cell = element("td", "host", item.host);
-    cell.append(element("span", "muted", ` learned by ${item.owner}`));
-    row.append(cell, routeCell(item), element("td", "muted", "—"), element("td", "muted", "—"), element("td"));
     table.append(row);
   }
   return table;
@@ -105,8 +96,7 @@ function renderGroups() {
   for (const [mask, group] of [...state.groups.entries()].sort()) {
     const hosts = Object.keys(group.hosts);
     const route = state.routes[mask];
-    const names = [...hosts, ...(route?.shared ?? []).filter(({ verdict }) => verdict !== "same").map(({ host }) => host)];
-    if (needle !== "" && !names.some((host) => host.includes(needle))) continue;
+    if (needle !== "" && !hosts.some((host) => host.includes(needle))) continue;
     const box = element("details");
     box.open = needle !== "" || open.has(mask);
     const summary = element("summary");
@@ -116,6 +106,18 @@ function renderGroups() {
     const blocked = blockedCount(route);
     if (blocked > 0) info.append(element("span", "error", ` · ${blocked} blocked by a proxy conflict`));
     summary.append(info);
+    // The root's own site handed to another root: the root's pages go through that root's proxy, or are closed.
+    const siteOwner = route?.siteOwner ?? mask;
+    if (siteOwner !== mask) {
+      info.append(element("span", "warn", ` · site routed by ${siteOwner}`));
+      const back = element("button", "small", "Route here");
+      back.title = `Route ${mask} through this root's proxy again`;
+      back.addEventListener("click", (event) => {
+        event.preventDefault();
+        run(back, { type: "routeHere", mask, hosts: [mask] });
+      });
+      summary.append(back);
+    }
     const clear = element("button", "small", "Clear group");
     clear.addEventListener("click", async (event) => {
       event.preventDefault();
@@ -166,7 +168,7 @@ document.getElementById("copy").addEventListener("click", async () => {
 document.getElementById("download").addEventListener("click", () => download("rootpac.pac", state.appliedPac, "application/x-ns-proxy-autoconfig"));
 filter.addEventListener("input", renderGroups);
 let refresh = 0;
-const VIEWED = new Set(["appliedPac", "userPac", "analysis", "proxies"]);
+const VIEWED = new Set(["appliedPac", "userPac", "analysis", "proxies", "sites"]);
 
 onStored((changes) => {
   if (!Object.keys(changes).some((key) => VIEWED.has(key) || key.startsWith("group:") || key.startsWith("seen:"))) return;

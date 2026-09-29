@@ -8,7 +8,8 @@ import { FakeArea, deferred } from "./fakes.js";
 const USER_PAC = 'function FindProxyForURL(url, host) {\n  return root(host, "a.com") ? "PROXY p:1" : "DIRECT";\n}';
 const ANALYSIS = { roots: ["a.com"], deny: [], bypass: [] };
 const GROUP = { rootHost: "www.a.com", hosts: { "cdn.a.net": 1 } };
-const APPLIED = buildSystemPac(USER_PAC, { "a.com": GROUP }, PSL);
+const SITES = { "a.com": "a.com", "a.net": "a.com" };
+const APPLIED = buildSystemPac(USER_PAC, { "a.com": GROUP }, PSL, SITES);
 
 function stored(extra = {}) {
   return {
@@ -19,6 +20,7 @@ function stored(extra = {}) {
     appliedPac: APPLIED,
     "group:a.com": GROUP,
     "seen:a.com": { "cdn.a.net": 5 },
+    sites: SITES,
     ...extra,
   };
 }
@@ -27,7 +29,7 @@ test("first load writes the schema and defaults", async () => {
   const area = new FakeArea();
   const store = new Store(area, new FakeArea());
   const state = await store.load(PSL);
-  assert.deepEqual(state, { enabled: true, userPac: null, analysis: null, appliedPac: null, userPacErrors: null, proxies: null, groups: {}, seen: {} });
+  assert.deepEqual(state, { enabled: true, userPac: null, analysis: null, appliedPac: null, userPacErrors: null, proxies: null, sites: null, groups: {}, seen: {} });
   assert.deepEqual(area.items, { schemaVersion: SCHEMA_VERSION, enabled: true });
 });
 
@@ -38,6 +40,14 @@ test("load decodes per-group keys without rewriting anything", async () => {
   assert.deepEqual(state.seen, { "a.com": { "cdn.a.net": 5 } });
   assert.equal(state.userPac, USER_PAC);
   assert.deepEqual(area.writes(), []);
+});
+
+test("a state from a version without site owners gets them from its groups once", async () => {
+  const { sites, ...legacy } = stored();
+  const area = new FakeArea(legacy);
+  const state = await new Store(area, new FakeArea()).load(PSL);
+  assert.deepEqual(state.sites, SITES);
+  assert.deepEqual(area.writes(), [["set", ["sites"]]]);
 });
 
 test("load repairs groups left behind by an interrupted commit", async () => {
@@ -116,6 +126,7 @@ test("a stored User PAC that no longer validates keeps the last applied configur
     appliedPac: "last applied",
     userPacErrors: errors,
     proxies: null,
+    sites: SITES,
     groups: { "a.com": GROUP },
     seen: { "a.com": { "cdn.a.net": 5 } },
   });
@@ -221,9 +232,9 @@ test("load aggregates already learned hosts and rebuilds a smaller System PAC", 
   const area = new FakeArea(stored({ "group:a.com": { rootHost: "www.a.com", hosts }, "seen:a.com": { "rr1---sn-a.googlevideo.com": 9, "cdn.a.net": 5 } }));
   const before = buildSystemPac(USER_PAC, { "a.com": { rootHost: "www.a.com", hosts } }, PSL);
   const state = await new Store(area, new FakeArea()).load(PSL);
-  assert.deepEqual(state.groups["a.com"].hosts, { "cdn.a.net": 1, "googlevideo.com": 4 });
+  assert.deepEqual(state.groups["a.com"].hosts, { "cdn.a.net": 1, "googlevideo.com": 2 });
   assert.deepEqual(state.seen, { "a.com": { "cdn.a.net": 5, "googlevideo.com": 9 } });
-  assert.equal(area.items.appliedPac, buildSystemPac(USER_PAC, state.groups, PSL));
+  assert.equal(area.items.appliedPac, buildSystemPac(USER_PAC, state.groups, PSL, state.sites));
   assert.ok(area.items.appliedPac.length < before.length);
 });
 

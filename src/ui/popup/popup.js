@@ -41,9 +41,9 @@ function conflictBanner(conflicts, mask, tabId) {
   const plural = conflicts.length === 1 ? "" : "s";
   const head = element("div", "head");
   head.append(element("div", "title", `Proxy conflict: ${conflicts.length} host${plural} blocked`));
-  // Route here sends every blocked host of the page through this root's proxy and reloads the page to use them.
+  // Route here gives this root the sites of every blocked host of the page and reloads the page to use them.
   const routeHere = element("button", "small", "Route here");
-  routeHere.title = `Send ${conflicts.length === 1 ? "this host" : "these hosts"} through the proxy of ${mask}; the other roots keep them, blocked`;
+  routeHere.title = `Send ${conflicts.length === 1 ? "this site" : "these sites"} through the proxy of ${mask}; the other roots keep their hosts, blocked`;
   routeHere.addEventListener("click", async () => {
     routeHere.disabled = true;
     try {
@@ -69,7 +69,7 @@ function conflictBanner(conflicts, mask, tabId) {
   }
   const { proxy } = conflicts[0];
   const own = proxy === null ? "" : `This root uses ${proxy}. `;
-  const hint = `${own}A PAC sees the host, not the tab, so a host has one proxy for all roots: Route here moves ${conflicts.length === 1 ? "it" : "them"} to this root's proxy and blocks the other roots instead, or use one proxy for these roots.`;
+  const hint = `${own}Every host of a site goes through the proxy of the root that owns the site: Route here gives ${conflicts.length === 1 ? "it" : "them"} to this root and blocks the other roots instead, or use one proxy for these roots.`;
   node.title = hint;
   node.append(list, element("div", "hint", hint));
   banners.append(node);

@@ -106,7 +106,28 @@ function maskError(value, directive, problem) {
   return `${directive}() mask must be a domain or *.domain: ${mask}`;
 }
 
-function analyzeProgram(program) {
+// One site, one root: the route of a site is its root's, and a site split between roots would reach the service from
+// two proxies. So roots may not cover one another, may not share a registrable domain, and may not be a public suffix
+// (a set of sites). The site checks need the public suffix list; without it only overlaps are checked.
+function checkRoots(roots, psl, fail) {
+  const kept = [];
+  for (const found of [...roots].sort((a, b) => a.start - b.start)) {
+    if (kept.some((item) => item.mask === found.mask)) continue;
+    const name = JSON.stringify(found.mask);
+    const site = psl === null ? null : psl.registrableDomain(found.mask);
+    if (psl !== null && site === null) {
+      fail(found.node, `root() mask ${name} is a public suffix, not a site`);
+      continue;
+    }
+    const overlap = kept.find((item) => covers(item.mask, found.mask) || covers(found.mask, item.mask));
+    const shared = overlap ?? (site === null ? undefined : kept.find((item) => item.site === site));
+    if (overlap !== undefined) fail(found.node, `root() mask ${name} overlaps root() mask ${JSON.stringify(overlap.mask)}: one site can have one root`);
+    else if (shared !== undefined) fail(found.node, `root() mask ${name} is in the same site as root() mask ${JSON.stringify(shared.mask)} (${site}): one site can have one root`);
+    else kept.push({ mask: found.mask, site });
+  }
+}
+
+function analyzeProgram(program, psl) {
   const errors = [];
   const roots = [];
   const deny = [];
@@ -217,6 +238,7 @@ function analyzeProgram(program) {
     const clash = deny.find((item) => denyOverlapsBypass(item.mask, found.mask));
     if (clash !== undefined) fail(found.node, `bypass() mask ${JSON.stringify(found.mask)} overlaps deny() mask ${JSON.stringify(clash.mask)}`);
   }
+  checkRoots(roots, psl, fail);
   for (const found of deny) {
     const covered = roots.find((item) => covers(maskDomain(found.mask), item.mask));
     if (covered !== undefined) fail(found.node, `deny() mask ${JSON.stringify(found.mask)} covers root() mask ${JSON.stringify(covered.mask)}`);
@@ -239,7 +261,7 @@ function byPosition(a, b) {
   return a.line - b.line || a.column - b.column;
 }
 
-export function analyzeUserPac(text) {
+export function analyzeUserPac(text, psl = null) {
   if (typeof text !== "string") throw new TypeError("User PAC must be a string");
   let program;
   try {
@@ -257,7 +279,7 @@ export function analyzeUserPac(text) {
       ],
     };
   }
-  const { errors, roots, deny, bypass } = analyzeProgram(program);
+  const { errors, roots, deny, bypass } = analyzeProgram(program, psl);
   if (errors.length > 0) return { ok: false, errors: errors.map(position).sort(byPosition) };
   return { ok: true, roots, deny, bypass };
 }

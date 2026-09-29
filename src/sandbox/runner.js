@@ -92,8 +92,15 @@ var rootpacTrial = (function (global) {
     var answers = {};
     for (var i = 0; i < request.hosts.length; i++) {
       var host = request.hosts[i];
+      var url = "https://" + host + "/";
       failed = stage("probe", host, request.budget, function () {
-        var answer = global.FindProxyForURL("https://" + host + "/", host);
+        global.FindProxyForURL(url, host);
+      });
+      if (failed !== null) return failed;
+      // The User PAC's own answer, not the System PAC's: a root's proxy is what its User PAC says, even after its
+      // site was handed to another root. It runs on a budget of its own.
+      failed = stage("probe", host, request.budget, function () {
+        var answer = typeof global.__user === "function" ? global.__user(url, host) : null;
         answers[host] = typeof answer === "string" ? answer : null;
       });
       if (failed !== null) return failed;

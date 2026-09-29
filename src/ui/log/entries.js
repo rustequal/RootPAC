@@ -49,11 +49,11 @@ export function routeText({ route, group, entry }) {
   return null;
 }
 
-// A record two roots learned while the System PAC can give it only one route: the owner's.
+// A host of a site another root owns: every host of a site goes through the proxy of the site's root.
 export function conflictText({ host, root, owner, proxy, ownerProxy }) {
   const known = proxy !== null && proxy !== undefined && ownerProxy !== null && ownerProxy !== undefined;
-  if (!known) return `${host} is learned by ${root} and ${owner}, whose proxies are not checked yet; blocked for ${root} until they are`;
-  return `${host} is learned by ${root} (${proxy}) and ${owner} (${ownerProxy}); it goes through ${owner}'s proxy, so it is blocked for ${root}`;
+  if (!known) return `${host} goes through the proxy of ${owner}, whose site it is; the proxies are not checked yet, so it is blocked for ${root} until they are`;
+  return `${host} goes through the proxy of ${owner} (${ownerProxy}), whose site it is; ${root} uses ${proxy}, so it is blocked for ${root}`;
 }
 
 function requestText(entry) {
@@ -74,7 +74,7 @@ function commandText(entry) {
     case "removeHost":
       return `Host ${entry.host} removed from ${entry.root}`;
     case "routeHere":
-      return `${(entry.hosts ?? []).join(", ")} routed through the proxy of ${entry.root}`;
+      return `The sites of ${(entry.hosts ?? []).join(", ")} routed through the proxy of ${entry.root}`;
     case "clearGroup":
       return `Group ${entry.root} cleared`;
     default:

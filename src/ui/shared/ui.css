@@ -153,6 +153,7 @@ td.error {
   color: var(--error);
 }
 
+span.warn,
 td.warn {
   color: var(--warn-fg);
 }

@@ -22,7 +22,7 @@ test("the user guide contains a complete User PAC example", () => {
 
 test("every User PAC example in the guide passes validation and builds", () => {
   for (const text of examples()) {
-    const analysis = analyzeUserPac(text);
+    const analysis = analyzeUserPac(text, PSL);
     assert.deepEqual(analysis.errors ?? null, null);
     assert.ok(analysis.roots.length > 0);
     const groups = Object.fromEntries(analysis.roots.map((mask) => [mask, { rootHost: null, hosts: {} }]));

@@ -2,7 +2,7 @@ import { analyzeUserPac, isValidRoot, parseScript } from "./analyze.js";
 import { firstMatch } from "./glob.js";
 import { covers, isLearnableName, maskDomain, rootOf } from "./hosts.js";
 import { USER_OPEN, userPacLine } from "./pacline.js";
-import { routedGroups } from "./routes.js";
+import { bootstrapSites, routedGroups } from "./routes.js";
 
 export { userPacLine };
 
@@ -282,9 +282,9 @@ function assignNames(masks) {
   return names;
 }
 
-function checkUserPac(userPac) {
+function checkUserPac(userPac, psl) {
   if (typeof userPac !== "string") throw new TypeError("User PAC must be a string");
-  const analysis = analyzeUserPac(userPac);
+  const analysis = analyzeUserPac(userPac, psl);
   if (!analysis.ok) {
     const [{ line, column, message }] = analysis.errors;
     throw new Error(`User PAC is invalid at ${line}:${column}: ${message}`);
@@ -331,6 +331,13 @@ function checkGroups(groups, { roots, deny, bypass }) {
   }
 }
 
+function checkSites(sites, roots) {
+  if (!isPlainObject(sites)) throw new TypeError("Sites must be a plain object");
+  for (const [site, mask] of Object.entries(sites)) {
+    if (!roots.includes(mask)) throw new Error(`Site ${JSON.stringify(site)} belongs to ${JSON.stringify(mask)}, which has no root() in the User PAC`);
+  }
+}
+
 function renderGroup(mask, name, { rootHost, hosts }, psl) {
   const keys = Object.keys(hosts).sort();
   const body = [
@@ -354,21 +361,25 @@ function renderArray(name, items) {
   return [`var ${name} = [`, items.map((item) => `  ${item}`).join(",\n"), "];", ""];
 }
 
-export function buildSystemPac(userPac, groups, psl) {
+// `sites` names the owner of each site (core/routes.js); without it, owners are derived from the groups.
+export function buildSystemPac(userPac, groups, psl, sites) {
   if (typeof psl?.isPublicSuffix !== "function") throw new TypeError("System PAC needs the public suffix list");
-  const analysis = checkUserPac(userPac);
+  const analysis = checkUserPac(userPac, psl);
   checkGroups(groups, analysis);
+  const owners = sites === undefined ? bootstrapSites(groups, analysis.roots, psl) : sites;
+  checkSites(owners, analysis.roots);
   const masks = Object.keys(groups).sort();
   const names = assignNames(masks);
-  // A record held by several groups is routed by one of them; only that group carries it into the PAC.
-  const routed = routedGroups(groups);
+  // Every learned host goes through the owner of its site, so each group carries the hosts of the sites it owns.
+  const { routed, pacRoots } = routedGroups(groups, owners, analysis.roots, psl);
+  const rendered = (mask) => (Object.keys(routed[mask].hosts).length === 0 ? { rootHost: groups[mask].rootHost, hosts: {} } : routed[mask]);
   const bypass = [...new Set(analysis.bypass)].sort();
   const literals = (items) => items.map((item) => JSON.stringify(item));
   const text = [
     ...HEADER,
-    ...masks.flatMap((mask) => renderGroup(mask, names.get(mask), routed[mask], psl)),
+    ...masks.flatMap((mask) => renderGroup(mask, names.get(mask), rendered(mask), psl)),
     ...renderArray("__GROUPS", masks.map((mask) => names.get(mask))),
-    ...renderArray("__ROOTS", literals(masks)),
+    ...renderArray("__ROOTS", literals(masks.filter((mask) => pacRoots.includes(mask)))),
     ...renderArray("__BYPASS_HOSTS", literals(bypass.filter((mask) => !mask.startsWith("*.")))),
     ...renderArray("__BYPASS_SUBDOMAINS", literals(bypass.filter((mask) => mask.startsWith("*.")).map(maskDomain))),
     ...ROUTER,
