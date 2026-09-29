@@ -1,8 +1,8 @@
 import { analyzeUserPac } from "../core/analyze.js";
 import { exportBackup, readBackup } from "../core/backup.js";
 import { buildSystemPac } from "../core/build.js";
-import { rootOf } from "../core/hosts.js";
-import { adoptLegacyGroups, aggregateGroups, pruneSeen, reconcileGroups } from "../core/groups.js";
+import { maskDomain, rootOf } from "../core/hosts.js";
+import { adoptLegacyGroups, aggregateGroups, pruneSeen, reconcileGroups, reconcileUses } from "../core/groups.js";
 import { answersOf, bootstrapSites, normalizeSites, proxiesOf, releaseSites, routeSites, sharedRoutes, siteOf, sitesOfState } from "../core/routes.js";
 import { trialAnswers, trialErrors, trialPlan } from "../core/trial.js";
 import { NO_LOG } from "./log.js";
@@ -15,6 +15,14 @@ function requireGroup(state, mask) {
   requireString(mask, "mask");
   if (!Object.hasOwn(state.groups, mask)) throw new Error(`Unknown group ${JSON.stringify(mask)}`);
   return state.groups[mask];
+}
+
+// The root hosts of every root with those of `mask` replaced; a root without any has no record.
+function withUses(uses, mask, records) {
+  const next = { ...(uses ?? {}) };
+  if (Object.keys(records).length === 0) delete next[mask];
+  else next[mask] = records;
+  return next;
 }
 
 function requireValidUserPac(state) {
@@ -59,7 +67,8 @@ export function createCommands({ store, engine, checker, learner, log = NO_LOG, 
     if (errors.length > 0) return { ok: false, errors };
     return store.run(async (state) => {
       const { groups, seen, sites } = normalize(state, analysis);
-      const next = rebuild({ ...state, userPac: text, analysis, userPacErrors: null, proxies: proxiesOf(groups, answers) }, groups, seen, sites);
+      const uses = reconcileUses(state.uses ?? {}, analysis.roots);
+      const next = rebuild({ ...state, userPac: text, analysis, userPacErrors: null, proxies: proxiesOf(groups, answers), uses }, groups, seen, sites);
       const control = await engine.commit(next);
       return { ok: true, errors: [], analysis, control };
     });
@@ -75,6 +84,13 @@ export function createCommands({ store, engine, checker, learner, log = NO_LOG, 
     return store.run(async (state) => {
       requireValidUserPac(state);
       const group = requireGroup(state, mask);
+      // A host of a root's domain is only a record of what the root's pages requested: forgetting it changes no route.
+      const used = state.uses?.[mask] ?? {};
+      if (!Object.hasOwn(group.hosts, host) && Object.hasOwn(used, host)) {
+        const { [host]: removed, ...kept } = used;
+        await store.commit({ ...state, uses: withUses(state.uses, mask, kept) });
+        return { ok: true, control: null };
+      }
       if (!Object.hasOwn(group.hosts, host)) throw new Error(`Host ${JSON.stringify(host)} is not in group ${JSON.stringify(mask)}`);
       const hosts = { ...group.hosts };
       delete hosts[host];
@@ -90,14 +106,21 @@ export function createCommands({ store, engine, checker, learner, log = NO_LOG, 
       requireValidUserPac(state);
       const group = requireGroup(state, mask);
       const kept = Object.entries(group.hosts).filter(([host]) => siteOf(host, store.psl) !== site);
-      if (kept.length === Object.keys(group.hosts).length) throw new Error(`Site ${JSON.stringify(site)} has no host in group ${JSON.stringify(mask)}`);
+      const used = Object.entries(state.uses?.[mask] ?? {});
+      const keptUses = used.filter(([host]) => siteOf(host, store.psl) !== site);
+      if (kept.length === Object.keys(group.hosts).length && keptUses.length === used.length) throw new Error(`Site ${JSON.stringify(site)} has no host in group ${JSON.stringify(mask)}`);
+      const uses = keptUses.length === used.length ? state.uses : withUses(state.uses, mask, Object.fromEntries(keptUses));
+      if (kept.length === Object.keys(group.hosts).length) {
+        await store.commit({ ...state, uses });
+        return { ok: true, control: null };
+      }
       const groups = { ...state.groups, [mask]: { rootHost: group.rootHost, hosts: Object.fromEntries(kept) } };
-      return { ok: true, control: await engine.commit(rebuild(state, groups, pruneSeen(state.seen, groups))) };
+      return { ok: true, control: await engine.commit(rebuild({ ...state, uses }, groups, pruneSeen(state.seen, groups))) };
     });
   };
 
-  // Route here: the root takes the sites of these names, hosts it holds or root domains; every host of those sites, in
-  // any group, then goes through its proxy.
+  // Route here: the root takes the sites of these names — hosts it holds, learned or requested of a root's domain, or root
+  // domains; every host of those sites, in any group, then goes through its proxy.
   const routeHere = async ({ mask, hosts }) => {
     if (!Array.isArray(hosts) || hosts.length === 0) throw new TypeError("hosts must be a non-empty array");
     for (const host of hosts) requireString(host, "host");
@@ -105,7 +128,7 @@ export function createCommands({ store, engine, checker, learner, log = NO_LOG, 
       requireValidUserPac(state);
       const group = requireGroup(state, mask);
       for (const host of hosts) {
-        if (!Object.hasOwn(group.hosts, host) && !state.analysis.roots.includes(host)) throw new Error(`Host ${JSON.stringify(host)} is not in group ${JSON.stringify(mask)}`);
+        if (!Object.hasOwn(group.hosts, host) && !Object.hasOwn(state.uses?.[mask] ?? {}, host) && !state.analysis.roots.includes(host)) throw new Error(`Host ${JSON.stringify(host)} is not in group ${JSON.stringify(mask)}`);
       }
       const sites = routeSites(state.sites, mask, hosts, store.psl);
       if (sites === state.sites) return { ok: true, control: null };
@@ -118,7 +141,7 @@ export function createCommands({ store, engine, checker, learner, log = NO_LOG, 
       requireValidUserPac(state);
       requireGroup(state, mask);
       const groups = { ...state.groups, [mask]: { rootHost: null, hosts: {} } };
-      return { ok: true, control: await engine.commit(rebuild(state, groups, pruneSeen(state.seen, groups))) };
+      return { ok: true, control: await engine.commit(rebuild({ ...state, uses: withUses(state.uses, mask, {}) }, groups, pruneSeen(state.seen, groups))) };
     });
   };
 
@@ -136,7 +159,8 @@ export function createCommands({ store, engine, checker, learner, log = NO_LOG, 
     const { errors, answers } = await trial(userPac, analysis, { groups, sites });
     if (errors.length > 0) return { ok: false, errors };
     return store.run(async (state) => {
-      const next = rebuild({ ...state, userPac, analysis, userPacErrors: null, proxies: proxiesOf(groups, answers) }, groups, {}, sites);
+      const uses = reconcileUses(read.uses, analysis.roots);
+      const next = rebuild({ ...state, userPac, analysis, userPacErrors: null, proxies: proxiesOf(groups, answers), uses }, groups, {}, sites);
       const control = await engine.commit(next);
       return { ok: true, errors: [], analysis, control };
     });
@@ -153,14 +177,16 @@ export function createCommands({ store, engine, checker, learner, log = NO_LOG, 
     const answers = answersOf(store.state);
     // The roots that handed their site to this one; only a root tab asks.
     const sites = group === null ? null : sitesOfState(store.state, analysis.roots, store.psl);
-    const taken = group === null ? 0 : analysis.roots.filter((root) => root !== mask && Object.hasOwn(groups, root) && sites[siteOf(root, store.psl)] === mask).length;
+    const taken = group === null ? [] : analysis.roots.filter((root) => root !== mask && Object.hasOwn(groups, root) && sites[siteOf(root, store.psl)] === mask);
+    // Every name once: a root's domain may also be among the hosts its pages requested.
+    const known = group === null ? null : new Set([...Object.keys(group.hosts), ...Object.keys(store.state.uses?.[mask] ?? {}), ...[mask, ...taken].map(maskDomain)]);
     return {
       ok: true,
       mask,
       rootHost: group?.rootHost ?? null,
-      // The root itself, its learned hosts and the domains of roots that handed their site to it: what the System PAC
-      // viewer lists for the group.
-      hostCount: group === null ? 0 : Object.keys(group.hosts).length + 1 + taken,
+      // The root itself, its learned hosts, the hosts of root domains its pages requested and the domains of roots that
+      // handed their site to it: what the System PAC viewer lists for the group.
+      hostCount: known === null ? 0 : known.size,
       loaded: learner.loaded(tabId),
       proxied: learner.proxied(tabId),
       newHosts: learner.newHosts(tabId),

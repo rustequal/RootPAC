@@ -64,7 +64,7 @@ test("hosts loaded by a root tab are learned, proxied and allowed", async () => 
   navigate(learner, "https://www.instagram.com/");
   request(learner, "https://static.cdninstagram.com/rsrc.php/a.js");
   await settled(learner);
-  assert.deepEqual(learned(area), { rootHost: "www.instagram.com", hosts: { "static.cdninstagram.com": 1000 } });
+  assert.deepEqual(learned(area), { rootHost: "www.instagram.com", hosts: { "static.cdninstagram.com": 1001 } });
   assert.equal(loadPac(browser.pac()).FindProxyForURL("https://static.cdninstagram.com/", "static.cdninstagram.com"), "SOCKS5 10.1.4.1:9487");
   assert.deepEqual(browser.sessionRules.get(RULE_IDS.hosts).condition.requestDomains, ["instagram.com", "static.cdninstagram.com"]);
   assert.deepEqual(browser.journal.names(), ["prediction.set", "webrtc.set", "proxy.set", "dnr.session"]);
@@ -75,7 +75,7 @@ test("the apex of the root domain learns into the root with itself as rootHost",
   navigate(learner, "https://instagram.com/");
   request(learner, "https://cdn.example.net/x");
   await settled(learner);
-  assert.deepEqual(learned(area), { rootHost: "instagram.com", hosts: { "cdn.example.net": 1000 } });
+  assert.deepEqual(learned(area), { rootHost: "instagram.com", hosts: { "cdn.example.net": 1001 } });
 });
 
 test("a root embedded in another site learns by its initiator", async () => {
@@ -167,7 +167,7 @@ test("single-flight: one apply at a time and late hosts go in one next batch", a
   assert.equal(learner.running, false);
   assert.equal(browser.journal.maxInFlight, 1);
   assert.equal(browser.journal.names().filter((name) => name === "proxy.set").length, 2);
-  assert.deepEqual(learned(area).hosts, { "a.cdn-a.net": 1000, "b.cdn-b.net": 1001, "c.cdn-c.net": 1001 });
+  assert.deepEqual(learned(area).hosts, { "a.cdn-a.net": 1001, "b.cdn-b.net": 1002, "c.cdn-c.net": 1002 });
   const pac = loadPac(browser.pac());
   for (const host of ["a.cdn-a.net", "b.cdn-b.net", "c.cdn-c.net"]) assert.notEqual(pac.FindProxyForURL(`https://${host}/`, host), "DIRECT");
 });
@@ -198,7 +198,7 @@ test("lastSeen is written once per host per browser session without rebuilding t
   area.calls.length = 0;
   request(learner, "https://static.cdninstagram.com/b.js", { tabId: 99, initiator: "https://example.org" });
   await settled(learner);
-  assert.deepEqual(area.items["seen:instagram.com"], { "static.cdninstagram.com": 1001 });
+  assert.deepEqual(area.items["seen:instagram.com"], { "static.cdninstagram.com": 1002 });
   assert.deepEqual(area.writes(), [["set", ["seen:instagram.com"]]]);
   assert.deepEqual(browser.journal.entries, []);
   request(learner, "https://static.cdninstagram.com/c.js");
@@ -208,7 +208,7 @@ test("lastSeen is written once per host per browser session without rebuilding t
   await restarted.restore();
   restarted.onRequest({ type: "script", tabId: TAB, url: "https://static.cdninstagram.com/d.js", documentLifecycle: "active" });
   await settled(restarted);
-  assert.deepEqual(area.items["seen:instagram.com"], { "static.cdninstagram.com": 1001 });
+  assert.deepEqual(area.items["seen:instagram.com"], { "static.cdninstagram.com": 1002 });
 });
 
 test("tab state follows commits, replacement and removal and survives a restart", async () => {
@@ -263,18 +263,18 @@ test("hosts sharing a registrable domain are aggregated and covered subdomains a
   navigate(learner, "https://www.instagram.com/");
   request(learner, "https://rr1---sn-a.googlevideo.com/v");
   await settled(learner);
-  assert.deepEqual(learned(area).hosts, { "rr1---sn-a.googlevideo.com": 1000 });
+  assert.deepEqual(learned(area).hosts, { "rr1---sn-a.googlevideo.com": 1001 });
   request(learner, "https://rr2---sn-b.googlevideo.com/v");
   await settled(learner);
-  assert.deepEqual(learned(area).hosts, { "googlevideo.com": 1000 });
+  assert.deepEqual(learned(area).hosts, { "googlevideo.com": 1001 });
   assert.deepEqual(browser.sessionRules.get(RULE_IDS.hosts).condition.requestDomains, ["googlevideo.com", "instagram.com"]);
   browser.journal.clear();
   request(learner, "https://rr3---sn-c.googlevideo.com/v");
   await settled(learner);
-  assert.deepEqual(learned(area).hosts, { "googlevideo.com": 1000 });
+  assert.deepEqual(learned(area).hosts, { "googlevideo.com": 1001 });
   assert.deepEqual(browser.journal.entries, []);
-  assert.deepEqual(area.items["seen:instagram.com"], { "googlevideo.com": 1002 });
-  assert.deepEqual((await session.get("seenThisSession")).seenThisSession, ["instagram.com googlevideo.com"]);
+  assert.deepEqual(area.items["seen:instagram.com"], { "googlevideo.com": 1003 });
+  assert.deepEqual((await session.get("seenThisSession")).seenThisSession, ["instagram.com www.instagram.com", "instagram.com googlevideo.com"]);
 });
 
 const commit = (learner, tabId = TAB, url = "https://www.instagram.com/") =>

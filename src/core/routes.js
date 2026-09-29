@@ -229,9 +229,10 @@ export function routedGroups(groups, sites, roots, psl) {
   return { routed, pacRoots };
 }
 
-// For the viewer: each root's proxy, the site, owner and verdict of its own domain and of every host it holds, the
-// domains of roots that handed their site to it, and for the sites it owns, the roots a proxy conflict blocks. A root's
-// domain is never learned, but it is a site of the root that routes it like any learned one.
+// For the viewer: each root's proxy, the site, owner and verdict of its own domain and of every host it holds — learned,
+// or of a root's domain its pages requested (`uses`) — the domains of roots that handed their site to it, and for the
+// sites it owns, the roots a proxy conflict blocks. A root's domain is never learned, but it is a site of the root that
+// routes it like any learned one.
 export function sharedRoutes(state, psl) {
   const answers = answersOf(state);
   const { groups } = state;
@@ -250,7 +251,7 @@ export function sharedRoutes(state, psl) {
   };
   for (const mask of Object.keys(groups)) {
     roots[mask].root = routeOf(mask, mask);
-    for (const host of Object.keys(groups[mask].hosts)) {
+    for (const host of [...Object.keys(groups[mask].hosts), ...Object.keys(state.uses?.[mask] ?? {})]) {
       const route = routeOf(mask, host);
       roots[mask].records[host] = route;
       if (route.verdict === CONFLICT) block(route.owner, route.site, mask);

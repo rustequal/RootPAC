@@ -222,14 +222,20 @@ test("the viewer gets each root's proxy, the owner of its site and the hosts it 
       "facebook.com": {
         proxy: "PROXY fb:1",
         root: { site: "facebook.com", owner: "facebook.com", verdict: "same", ownerProxy: "PROXY fb:1" },
-        records: { "fbcdn.net": { site: "fbcdn.net", owner: "instagram.com", verdict: "conflict", ownerProxy: "PROXY ig:1" } },
+        records: {
+          "fbcdn.net": { site: "fbcdn.net", owner: "instagram.com", verdict: "conflict", ownerProxy: "PROXY ig:1" },
+          "www.facebook.com": { site: "facebook.com", owner: "facebook.com", verdict: "same", ownerProxy: "PROXY fb:1" },
+        },
         taken: {},
         blocks: {},
       },
       "instagram.com": {
         proxy: "PROXY ig:1",
         root: { site: "instagram.com", owner: "instagram.com", verdict: "same", ownerProxy: "PROXY ig:1" },
-        records: { "fbcdn.net": { site: "fbcdn.net", owner: "instagram.com", verdict: "same", ownerProxy: "PROXY ig:1" } },
+        records: {
+          "fbcdn.net": { site: "fbcdn.net", owner: "instagram.com", verdict: "same", ownerProxy: "PROXY ig:1" },
+          "www.instagram.com": { site: "instagram.com", owner: "instagram.com", verdict: "same", ownerProxy: "PROXY ig:1" },
+        },
         taken: {},
         blocks: { "fbcdn.net": ["facebook.com"] },
       },
@@ -330,6 +336,60 @@ test("a root page closed by Route here shows the conflict in its tab, though the
   learner.onRequest({ ...details, requestId: "again" });
   learner.onCommitted({ tabId, frameId: 0, url: details.url, documentLifecycle: "active" });
   assert.deepEqual(learner.conflicts(tabId), []);
+});
+
+test("the hosts of root domains a root's pages request are recorded and shown, never routed", async () => {
+  const { store, browser, learner, resolver, commands } = await setup(userPac("PROXY fb:1", "PROXY ig:1"));
+  visit(learner, "https://www.instagram.com/");
+  await idle(learner, resolver);
+  const pac = store.state.appliedPac;
+  const groups = store.state.groups;
+  load(learner, "https://www.facebook.com/embed.js", { initiator: "https://www.instagram.com" });
+  load(learner, "https://static.xx.facebook.com/a.css", { initiator: "https://www.instagram.com" });
+  load(learner, "https://i.instagram.com/api", { initiator: "https://www.instagram.com" });
+  await settled(learner, resolver);
+  assert.deepEqual(Object.keys(store.state.uses["instagram.com"]).sort(), ["i.instagram.com", "static.xx.facebook.com", "www.facebook.com", "www.instagram.com"]);
+  // Only a record: the groups, the System PAC and the rules stay as they were.
+  assert.equal(store.state.appliedPac, pac);
+  assert.equal(store.state.groups, groups);
+  assert.equal(allowed(browser, "www.facebook.com", "instagram.com"), false);
+  // The viewer: the hosts with their routes; the owner sees the site blocked for the root that asked for it.
+  const { roots } = await commands.dispatch({ type: "getRoutes" });
+  assert.deepEqual(roots["instagram.com"].records["www.facebook.com"], { site: "facebook.com", owner: "facebook.com", verdict: "conflict", ownerProxy: "PROXY fb:1" });
+  assert.deepEqual(roots["instagram.com"].records["i.instagram.com"], { site: "instagram.com", owner: "instagram.com", verdict: "same", ownerProxy: "PROXY ig:1" });
+  assert.deepEqual(roots["facebook.com"].blocks, { "facebook.com": ["instagram.com"] });
+  visit(learner, "https://www.instagram.com/", TAB + 1);
+  assert.equal((await commands.dispatch({ type: "getTabState", tabId: TAB + 1 })).hostCount, 5);
+  // Route here from the viewer's facebook.com row names one of the requested hosts; handing the site back restores it.
+  assert.equal((await commands.dispatch({ type: "routeHere", mask: "instagram.com", hosts: ["static.xx.facebook.com"] })).ok, true);
+  assert.equal(store.state.sites["facebook.com"], "instagram.com");
+  assert.equal((await commands.dispatch({ type: "routeHere", mask: "facebook.com", hosts: ["facebook.com"] })).ok, true);
+  // A known host costs no write until the next browser session.
+  const state = store.state;
+  load(learner, "https://www.facebook.com/embed2.js", { initiator: "https://www.instagram.com" });
+  await settled(learner, resolver);
+  assert.equal(store.state, state);
+  // Remove and Remove site forget the records, without touching the proxy or the rules; so does Clear group.
+  browser.journal.clear();
+  assert.equal((await commands.dispatch({ type: "removeHost", mask: "instagram.com", host: "static.xx.facebook.com" })).ok, true);
+  assert.deepEqual(Object.keys(store.state.uses["instagram.com"]).sort(), ["i.instagram.com", "www.facebook.com", "www.instagram.com"]);
+  assert.equal((await commands.dispatch({ type: "removeSite", mask: "instagram.com", site: "facebook.com" })).ok, true);
+  assert.deepEqual(Object.keys(store.state.uses["instagram.com"]).sort(), ["i.instagram.com", "www.instagram.com"]);
+  assert.deepEqual(browser.journal.entries, []);
+  // A backup carries them.
+  const { backup } = await commands.dispatch({ type: "exportState" });
+  assert.deepEqual(Object.keys(backup.uses["instagram.com"]).sort(), ["i.instagram.com", "www.instagram.com"]);
+  assert.equal((await commands.dispatch({ type: "clearGroup", mask: "instagram.com" })).ok, true);
+  assert.equal(Object.hasOwn(store.state.uses, "instagram.com"), false);
+  assert.equal((await commands.dispatch({ type: "importState", backup })).ok, true);
+  assert.deepEqual(Object.keys(store.state.uses["instagram.com"]).sort(), ["i.instagram.com", "www.instagram.com"]);
+  // A User PAC without the root drops its records and the records of its domain.
+  load(learner, "https://www.facebook.com/embed3.js", { initiator: "https://www.instagram.com" });
+  await settled(learner, resolver);
+  assert.equal((await commands.dispatch({ type: "saveUserPac", text: userPacOf({ "instagram.com": "PROXY ig:1" }) })).ok, true);
+  assert.deepEqual(Object.keys(store.state.uses["instagram.com"]).sort(), ["i.instagram.com", "www.instagram.com"]);
+  assert.equal((await commands.dispatch({ type: "saveUserPac", text: userPacOf({ "facebook.com": "PROXY fb:1" }) })).ok, true);
+  assert.deepEqual(store.state.uses, {});
 });
 
 test("a removed root takes its sites with it: every root forgets their hosts and learns them anew", async () => {

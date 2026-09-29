@@ -29,7 +29,7 @@ test("first load writes the schema and defaults", async () => {
   const area = new FakeArea();
   const store = new Store(area, new FakeArea());
   const state = await store.load(PSL);
-  assert.deepEqual(state, { enabled: true, userPac: null, analysis: null, appliedPac: null, userPacErrors: null, proxies: null, sites: null, groups: {}, seen: {} });
+  assert.deepEqual(state, { enabled: true, userPac: null, analysis: null, appliedPac: null, userPacErrors: null, proxies: null, sites: null, groups: {}, seen: {}, uses: {} });
   assert.deepEqual(area.items, { schemaVersion: SCHEMA_VERSION, enabled: true });
 });
 
@@ -129,6 +129,7 @@ test("a stored User PAC that no longer validates keeps the last applied configur
     sites: SITES,
     groups: { "a.com": GROUP },
     seen: { "a.com": { "cdn.a.net": 5 } },
+    uses: {},
   });
   assert.deepEqual(area.items, { ...items, userPacErrors: errors });
   area.calls.length = 0;

@@ -1,5 +1,5 @@
 import { buildSystemPac } from "../core/build.js";
-import { aggregateGroups, hostIndex, mergeGroups, mergeSeen } from "../core/groups.js";
+import { aggregateGroups, hostIndex, mergeGroups, mergeSeen, mergeUses } from "../core/groups.js";
 import { firstMatch } from "../core/glob.js";
 import { hostFromUrl, isLearnable, isLearnableName, learnedOwner, rootOf, underDeny } from "../core/hosts.js";
 import { reportEndpointHosts } from "../core/reporting.js";
@@ -35,6 +35,8 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
   const tracked = new Map();
   const pending = new Map();
   const observed = new Map();
+  // Hosts of root domains the pages of a root requested, new or first seen this session, as [mask, host] by key.
+  const used = new Map();
   const seenThisSession = new Set();
   let indexed = { groups: null, index: new Map(), own: new Map() };
   let running = false;
@@ -345,7 +347,7 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
     return accepted;
   };
 
-  const apply = async (state, learn, seen) => {
+  const apply = async (state, learn, seen, uses = new Map()) => {
     if (!learning(state)) return;
     const accepted = accept(state, learn);
     const observedNow = [...seen]
@@ -353,15 +355,16 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
       .filter(([, masks]) => masks.length > 0);
     const time = now();
     const nextSeen = observedNow.length > 0 ? mergeSeen(state.seen, observedNow, time) : state.seen;
+    const nextUses = uses.size > 0 ? mergeUses(state.uses ?? {}, uses.values(), time) : state.uses;
     if (accepted.length === 0) {
-      if (nextSeen !== state.seen) await store.commit({ ...state, seen: nextSeen });
+      if (nextSeen !== state.seen || nextUses !== state.uses) await store.commit({ ...state, seen: nextSeen, uses: nextUses });
       return;
     }
     const batch = accepted.map((source) => [source.host, source]);
     // A site nobody owns goes to the root that learned it first.
     const sites = claimSites(sitesOf(state), accepted.map((source) => [source.host, source.mask]), store.psl);
     const { groups, seen: aggregatedSeen } = aggregateGroups(mergeGroups(state.groups, batch, time), nextSeen, state.analysis, store.psl);
-    const next = { ...state, groups, sites, seen: aggregatedSeen, appliedPac: buildSystemPac(state.userPac, groups, store.psl, sites) };
+    const next = { ...state, groups, sites, seen: aggregatedSeen, uses: nextUses, appliedPac: buildSystemPac(state.userPac, groups, store.psl, sites) };
     await engine.commit(next);
     if (log.on) {
       for (const { host, mask, rootHost, tabId } of accepted) log.add("learned", { host, root: mask, rootHost, tabId });
@@ -376,13 +379,20 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
     count(fresh);
   };
 
-  const commitSafely = async (learn, seen) => {
+  const commitSafely = async (learn, seen, uses) => {
     try {
-      await store.run((state) => apply(state, learn, seen));
+      await store.run((state) => apply(state, learn, seen, uses));
       return null;
     } catch (error) {
       if (learn.size <= 1) return error;
       let failure = null;
+      if (uses.size > 0) {
+        try {
+          await store.run((state) => apply(state, new Map(), new Map(), uses));
+        } catch (single) {
+          failure = single;
+        }
+      }
       for (const entry of learn) {
         try {
           await store.run((state) => apply(state, new Map([entry]), new Map()));
@@ -397,12 +407,14 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
   const flush = async () => {
     running = true;
     try {
-      while (pending.size > 0 || observed.size > 0) {
+      while (pending.size > 0 || observed.size > 0 || used.size > 0) {
         const learn = new Map(pending);
         const seen = new Map(observed);
+        const uses = new Map(used);
         pending.clear();
         observed.clear();
-        const failure = await commitSafely(learn, seen);
+        used.clear();
+        const failure = await commitSafely(learn, seen, uses);
         if (failure !== null) {
           failed = true;
           if (log.on) log.add("learnError", { message: failure instanceof Error ? failure.message : String(failure) });
@@ -427,6 +439,17 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
     if (pending.has(key) || targetOf(host, source.mask, state) === null) return false;
     pending.set(key, { ...source, request: host });
     return true;
+  };
+
+  // A host of a root's domain requested by the pages of `mask`: recorded when new, its last seen once a session. Only
+  // what a root has not recorded yet costs a write; the rest is one lookup.
+  const noteUse = (host, mask, state) => {
+    const key = keyOf(mask, host);
+    if (used.has(key)) return;
+    if (seenThisSession.has(key) && Object.hasOwn(state.uses?.[mask] ?? {}, host)) return;
+    seenThisSession.add(key);
+    used.set(key, [mask, host]);
+    schedule();
   };
 
   const observe = (host, masks) => {
@@ -502,6 +525,7 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
         const host = hostFromUrl(details.url);
         const mask = learning(state) && host !== null ? rootOf(host, state.analysis.roots) : null;
         if (mask === null) return;
+        noteUse(host, mask, state);
         // A root that handed its own site to a root on another proxy has its pages closed (core/rules.js): the page
         // never commits, so the blocked load itself tells the tab which root it is and why.
         const route = routeFor(mask, mask, state);
@@ -529,6 +553,7 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
       // A root's domain is never learned: every root's pages may use it while its site goes through their proxy, and
       // are blocked from it otherwise, the root's own pages included once it has handed its site over.
       if (hostRoot !== null) {
+        noteUse(host, source.mask, state);
         const route = routeFor(hostRoot, source.mask, state);
         if (route.verdict === CONFLICT) markConflict(source, route, state, host);
         else if (route.verdict !== SAME && current(source.tabId, source.navigation)) markIncomplete(source.tabId);

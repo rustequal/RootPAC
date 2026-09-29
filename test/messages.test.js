@@ -320,7 +320,7 @@ test("importState refuses bad backups without changing anything", async () => {
   const { area, browser, commands } = await setup();
   const good = { schemaVersion: 1, userPac: TRAINED.userPac, groups: { "a.com": { rootHost: "www.a.com", hosts: {} }, "old.com": { rootHost: null, hosts: {} } } };
   const cases = [
-    [{ ...good, schemaVersion: 3 }, { ok: false, error: "Unsupported backup schema version 3" }],
+    [{ ...good, schemaVersion: 4 }, { ok: false, error: "Unsupported backup schema version 4" }],
     [{ ...good, groups: { "a.com": good.groups["a.com"] } }, { ok: false, error: 'Root "old.com" has no group' }],
     [{ ...good, userPac: "var root;" }, null],
     [{ ...good, userPac: good.userPac.replace('"PROXY p:1"', '"DIRECT"') }, { ok: false, errors: [{ line: null, column: null, message: "User PAC returned no proxy for a.com" }] }],
