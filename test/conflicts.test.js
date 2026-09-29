@@ -132,14 +132,14 @@ test("roots on different proxies: the site stays with its owner and is blocked f
   assert.deepEqual(conflictsOf(store.state), [{ root: "facebook.com", host: "fbcdn.net" }]);
   assert.equal(learner.newHosts(TAB), 1);
   reloadFacebook(learner);
-  assert.deepEqual(learner.conflicts(TAB), [{ host: "fbcdn.net", root: "facebook.com", owner: "instagram.com" }]);
+  assert.deepEqual(learner.conflicts(TAB), [{ host: "fbcdn.net", request: "scontent.fbcdn.net", root: "facebook.com", owner: "instagram.com" }]);
   assert.equal(learner.newHosts(TAB), 0);
   const logged = log.entries.filter(({ kind }) => kind === "conflict");
-  assert.deepEqual(logged, [{ kind: "conflict", host: "fbcdn.net", root: "facebook.com", owner: "instagram.com", proxy: "PROXY fb:1", ownerProxy: "PROXY ig:1", tabId: TAB }]);
+  assert.deepEqual(logged, [{ kind: "conflict", host: "fbcdn.net", request: "scontent.fbcdn.net", root: "facebook.com", owner: "instagram.com", proxy: "PROXY fb:1", ownerProxy: "PROXY ig:1", tabId: TAB }]);
   assert.equal(entryLevel(logged[0]), "error");
   assert.equal(
     entryText(logged[0]),
-    "Proxy conflict: fbcdn.net goes through the proxy of instagram.com (PROXY ig:1), whose site it is; facebook.com uses PROXY fb:1, so it is blocked for facebook.com · tab 3",
+    "Proxy conflict: scontent.fbcdn.net (fbcdn.net) goes through the proxy of instagram.com (PROXY ig:1), whose site it is; facebook.com uses PROXY fb:1, so it is blocked for facebook.com · tab 3",
   );
 });
 
@@ -147,7 +147,7 @@ test("the popup reports the conflicts of the tab with both proxies", async () =>
   const { commands, learner } = await shared(userPac("PROXY fb:1", "PROXY ig:1"));
   reloadFacebook(learner);
   const state = await commands.dispatch({ type: "getTabState", tabId: TAB });
-  assert.deepEqual(state.conflicts, [{ host: "fbcdn.net", root: "facebook.com", owner: "instagram.com", proxy: "PROXY fb:1", ownerProxy: "PROXY ig:1" }]);
+  assert.deepEqual(state.conflicts, [{ host: "fbcdn.net", request: "scontent.fbcdn.net", site: "fbcdn.net", root: "facebook.com", owner: "instagram.com", proxy: "PROXY fb:1", ownerProxy: "PROXY ig:1" }]);
   assert.match(conflictText(state.conflicts[0]), /blocked for facebook\.com/);
 });
 
@@ -278,7 +278,7 @@ test("a root's domain is blocked in the pages of a root on another proxy and rep
   visit(learner, "https://www.facebook.com/");
   load(learner, "https://www.instagram.com/embed.js", { initiator: "https://www.facebook.com" });
   await settled(learner, resolver);
-  assert.deepEqual(learner.conflicts(TAB), [{ host: "instagram.com", root: "facebook.com", owner: "instagram.com" }]);
+  assert.deepEqual(learner.conflicts(TAB), [{ host: "instagram.com", request: "www.instagram.com", root: "facebook.com", owner: "instagram.com" }]);
   assert.deepEqual(store.state.groups["facebook.com"].hosts, {});
   const same = await setup(userPac("PROXY fb:1", "PROXY fb:1"));
   assert.equal(allowed(same.browser, "www.instagram.com", "facebook.com"), true);
@@ -290,7 +290,7 @@ test("a root's domain is blocked in the pages of a root on another proxy and rep
   assert.equal(allowed(browser, "www.instagram.com", null, null, "main_frame"), false);
   visit(learner, "https://www.instagram.com/");
   load(learner, "https://www.instagram.com/app.js", { initiator: "https://www.instagram.com" });
-  assert.deepEqual(learner.conflicts(TAB), [{ host: "instagram.com", root: "instagram.com", owner: "facebook.com" }]);
+  assert.deepEqual(learner.conflicts(TAB), [{ host: "instagram.com", request: "www.instagram.com", root: "instagram.com", owner: "facebook.com" }]);
   assert.equal((await commands.dispatch({ type: "routeHere", mask: "instagram.com", hosts: ["instagram.com"] })).ok, true);
   assert.equal(route(browser, "www.instagram.com"), "PROXY ig:1");
   assert.equal(allowed(browser, "www.instagram.com", null, null, "main_frame"), true);
@@ -345,4 +345,19 @@ test("roots that overlap or share a site are refused when the User PAC is saved"
   assert.deepEqual(site.errors.map(({ message }) => message), ['root() mask "docs.google.com" is in the same site as root() mask "mail.google.com" (google.com): one site can have one root']);
   const suffix = await commands.dispatch({ type: "saveUserPac", text: userPacOf({ "github.io": "PROXY a:1" }) });
   assert.deepEqual(suffix.errors.map(({ message }) => message), ['root() mask "github.io" is a public suffix, not a site']);
+});
+
+test("the viewer removes every host of one site from a group at once", async () => {
+  const { store, learner, resolver, commands, log } = await setup(userPac("PROXY fb:1", "PROXY ig:1"));
+  visit(learner, "https://www.instagram.com/");
+  load(learner, "https://a.cdn.net/1.png", { initiator: "https://www.instagram.com" });
+  load(learner, "https://b.other.cdn.net/2.png", { initiator: "https://www.instagram.com" });
+  load(learner, "https://img.org/3.png", { initiator: "https://www.instagram.com" });
+  await idle(learner, resolver);
+  assert.deepEqual(Object.keys(store.state.groups["instagram.com"].hosts).sort(), ["cdn.net", "img.org"]);
+  assert.equal((await commands.dispatch({ type: "removeSite", mask: "instagram.com", site: "cdn.net" })).ok, true);
+  assert.deepEqual(Object.keys(store.state.groups["instagram.com"].hosts), ["img.org"]);
+  assert.equal(Object.hasOwn(store.state.sites, "cdn.net"), false);
+  assert.match((await commands.dispatch({ type: "removeSite", mask: "instagram.com", site: "cdn.net" })).error, /has no host/);
+  assert.equal(entryText(log.entries.find(({ kind, command }) => kind === "command" && command === "removeSite")), "Site cdn.net removed from instagram.com");
 });

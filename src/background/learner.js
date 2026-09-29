@@ -173,15 +173,16 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
   };
 
   // A root holds a record that another root's proxy carries: the request is blocked for it, and a reload cannot help.
-  const markConflict = (source, { entry, owner }, state) => {
-    if (log.on && firstTime(conflicted, keyOf(source.mask, entry))) {
+  // `entry` is the record (or root domain) the verdict is about, `request` the host the page asked for.
+  const markConflict = (source, { entry, owner }, state, request) => {
+    if (log.on && firstTime(conflicted, keyOf(source.mask, request))) {
       const answers = answersOfState(state);
-      log.add("conflict", { host: entry, root: source.mask, owner, proxy: answers[source.mask] ?? null, ownerProxy: answers[owner] ?? null, tabId: source.tabId });
+      log.add("conflict", { host: entry, request, root: source.mask, owner, proxy: answers[source.mask] ?? null, ownerProxy: answers[owner] ?? null, tabId: source.tabId });
     }
     if (source.tabId === null || !current(source.tabId, source.navigation)) return;
     const tab = tabs.get(source.tabId);
-    if (tab.conflicts.length >= MAX_CONFLICTS || tab.conflicts.some((item) => item.host === entry && item.root === source.mask)) return;
-    tab.conflicts.push({ host: entry, root: source.mask, owner });
+    if (tab.conflicts.length >= MAX_CONFLICTS || tab.conflicts.some((item) => item.request === request && item.root === source.mask)) return;
+    tab.conflicts.push({ host: entry, request, root: source.mask, owner });
     changed(source.tabId);
   };
 
@@ -347,7 +348,7 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
     for (const source of accepted) {
       const entry = learnedOwner(source.request, indexOf(next.groups), store.psl);
       const route = entry === null ? null : routeFor(entry, source.mask, next);
-      if (route?.verdict === CONFLICT) markConflict(source, route, next);
+      if (route?.verdict === CONFLICT) markConflict(source, route, next, source.request);
       else fresh.push(source);
     }
     count(fresh);
@@ -503,7 +504,7 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
       // are blocked from it otherwise, the root's own pages included once it has handed its site over.
       if (hostRoot !== null) {
         const route = routeFor(hostRoot, source.mask, state);
-        if (route.verdict === CONFLICT) markConflict(source, route, state);
+        if (route.verdict === CONFLICT) markConflict(source, route, state, host);
         else if (route.verdict !== SAME && current(source.tabId, source.navigation)) markIncomplete(source.tabId);
         return;
       }
@@ -512,7 +513,7 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
       if (own !== null) {
         observe(own, [source.mask]);
         const route = routeFor(own, source.mask, state);
-        if (route.verdict === CONFLICT) markConflict(source, route, state);
+        if (route.verdict === CONFLICT) markConflict(source, route, state, host);
         else if (route.verdict !== SAME && current(source.tabId, source.navigation)) markIncomplete(source.tabId);
         return;
       }

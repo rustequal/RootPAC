@@ -62,39 +62,72 @@ async function run(button, message) {
   }
 }
 
-function blockedCount(route) {
-  return Object.values(route?.records ?? {}).filter(({ verdict }) => verdict === "conflict").length;
+// The sites of a group, the root's own first: each with its route (the same for every host of the site) and the learned
+// hosts of this group in it.
+function sitesOf(mask, hosts, route) {
+  const rootRoute = route?.root ?? { site: mask, owner: mask, verdict: "same", ownerProxy: null };
+  const sites = new Map([[rootRoute.site, { route: rootRoute, hosts: [], root: true }]]);
+  const others = [];
+  for (const host of Object.keys(hosts).sort()) {
+    const record = route?.records[host] ?? { site: host, owner: mask, verdict: "same", ownerProxy: null };
+    if (!sites.has(record.site)) {
+      sites.set(record.site, { route: record, hosts: [], root: false });
+      others.push(record.site);
+    }
+    sites.get(record.site).hosts.push(host);
+  }
+  return [[rootRoute.site, sites.get(rootRoute.site)], ...others.sort().map((site) => [site, sites.get(site)])];
 }
 
-function hostRows(mask, hosts, seen, needle, route) {
+function blockedCount(mask, hosts, route) {
+  return sitesOf(mask, hosts, route).filter(([, { route: site }]) => site.verdict === "conflict").length;
+}
+
+function times(list, values, pick) {
+  const known = list.filter((host) => values[host] !== undefined).map((host) => values[host]);
+  return known.length === 0 ? "—" : formatTime(pick(...known));
+}
+
+// A row per site with its route, Route here and Remove for the whole site, and under it a row per learned host.
+function siteRows(mask, hosts, seen, needle, route) {
   const table = element("table", "hosts");
   const head = element("tr");
-  for (const label of ["Host", "Route", "Learned", "Last seen", ""]) head.append(element("th", undefined, label));
+  for (const label of ["Site and hosts", "Route", "Learned", "Last seen", ""]) head.append(element("th", undefined, label));
   table.append(head);
-  // The root itself comes first: its site goes through its own proxy unless it was handed to another root.
-  if (needle === "" || mask.includes(needle)) {
-    const row = element("tr");
-    const cell = element("td", "host", mask);
-    cell.append(element("span", "muted", " root"));
-    const record = route?.root ?? { site: mask, owner: mask, verdict: "same", ownerProxy: null };
-    row.append(cell, routeCell(mask, record, route?.blocks[record.site], (button) => run(button, { type: "routeHere", mask, hosts: [mask] }), true));
-    row.append(element("td", "muted", "—"), element("td", "muted", "—"), element("td"));
+  for (const [site, { route: siteRoute, hosts: list, root }] of sitesOf(mask, hosts, route)) {
+    const names = root ? [site, mask, ...list] : [site, ...list];
+    if (needle !== "" && !names.some((name) => name.includes(needle))) continue;
+    const row = element("tr", "site");
+    const name = element("td", "host", site);
+    if (root) name.append(element("div", "tag", "root site"));
+    const target = root ? mask : list[0];
+    row.append(name, routeCell(mask, siteRoute, route?.blocks[site], (button) => run(button, { type: "routeHere", mask, hosts: [target] }), root));
+    row.append(element("td", "muted", times(list, hosts, Math.min)), element("td", "muted", times(list, seen, Math.max)));
+    const actions = element("td");
+    if (list.length > 0) {
+      const remove = element("button", "small", "Remove");
+      remove.title = `Remove every learned host of ${site} from ${mask}`;
+      remove.addEventListener("click", () => run(remove, { type: "removeSite", mask, site }));
+      actions.append(remove);
+    }
+    row.append(actions);
     table.append(row);
-  }
-  for (const host of Object.keys(hosts).sort()) {
-    if (needle !== "" && !host.includes(needle)) continue;
-    const record = route?.records[host] ?? { site: host, owner: mask, verdict: "same", ownerProxy: null };
-    const row = element("tr");
-    row.append(element("td", "host", host));
-    row.append(routeCell(mask, record, route?.blocks[record.site], (button) => run(button, { type: "routeHere", mask, hosts: [host] })));
-    row.append(element("td", "muted", formatTime(hosts[host])));
-    row.append(element("td", "muted", seen[host] === undefined ? "—" : formatTime(seen[host])));
-    const cell = element("td");
-    const remove = element("button", "small", "Remove");
-    remove.addEventListener("click", () => run(remove, { type: "removeHost", mask, host }));
-    cell.append(remove);
-    row.append(cell);
-    table.append(row);
+    const sub = (host, learned, last, action = null) => {
+      const line = element("tr", "sub");
+      line.append(element("td", "host", host), element("td"), element("td", "muted", learned), element("td", "muted", last));
+      const cell = element("td");
+      if (action !== null) cell.append(action);
+      line.append(cell);
+      table.append(line);
+    };
+    if (root && site !== mask) sub(`${mask} · root`, "—", "—");
+    // A site learned as a single record of its own name needs no second line.
+    if (list.length === 1 && list[0] === site && !root) continue;
+    for (const host of list) {
+      const remove = element("button", "small", "Remove");
+      remove.addEventListener("click", () => run(remove, { type: "removeHost", mask, host }));
+      sub(host, formatTime(hosts[host]), seen[host] === undefined ? "—" : formatTime(seen[host]), remove);
+    }
   }
   return table;
 }
@@ -115,9 +148,10 @@ function renderGroups() {
     const summary = element("summary");
     summary.append(element("span", "mask", mask));
     const proxy = group.rootHost === null ? "" : ` · ${route?.proxy ?? "proxy not checked yet"}`;
-    const info = element("span", "muted grow", `${group.rootHost ?? "no root host yet"}${proxy} · ${hosts.length + 1} host${hosts.length === 0 ? "" : "s"}`);
-    const blocked = blockedCount(route);
-    if (blocked > 0) info.append(element("span", "error", ` · ${blocked} blocked by a proxy conflict`));
+    const siteCount = sitesOf(mask, group.hosts, route).length;
+    const info = element("span", "muted grow", `${group.rootHost ?? "no root host yet"}${proxy} · ${siteCount} site${siteCount === 1 ? "" : "s"}, ${hosts.length + 1} host${hosts.length === 0 ? "" : "s"}`);
+    const blocked = blockedCount(mask, group.hosts, route);
+    if (blocked > 0) info.append(element("span", "error", ` · ${blocked} site${blocked === 1 ? "" : "s"} blocked by a proxy conflict`));
     summary.append(info);
     // The root's own site handed to another root: the root's pages go through that root's proxy, or are closed.
     const siteOwner = route?.root?.owner ?? mask;
@@ -141,9 +175,9 @@ function renderGroups() {
         else open.delete(mask);
       }
       if (!box.open) return;
-      box.replaceChildren(summary, hostRows(mask, group.hosts, state.seen.get(mask) ?? {}, needle, route));
+      box.replaceChildren(summary, siteRows(mask, group.hosts, state.seen.get(mask) ?? {}, needle, route));
     });
-    if (box.open) box.append(hostRows(mask, group.hosts, state.seen.get(mask) ?? {}, needle, route));
+    if (box.open) box.append(siteRows(mask, group.hosts, state.seen.get(mask) ?? {}, needle, route));
     boxes.push(box);
   }
   groupsBox.replaceChildren(...(boxes.length === 0 ? [element("p", "muted", "No groups")] : boxes));

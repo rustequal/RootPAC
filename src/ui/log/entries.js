@@ -32,6 +32,7 @@ const COMMANDS = {
   importState: "Backup imported",
   setEnabled: "Proxy switched",
   removeHost: "Host removed",
+  removeSite: "Site removed",
   routeHere: "Route choice",
   clearGroup: "Group cleared",
 };
@@ -50,8 +51,9 @@ export function routeText({ route, group, entry }) {
 }
 
 // A host of a site another root owns: every host of a site goes through the proxy of the site's root.
-export function conflictText({ host, root, owner, proxy, ownerProxy }) {
+export function conflictText({ host: record, request, root, owner, proxy, ownerProxy }) {
   const known = proxy !== null && proxy !== undefined && ownerProxy !== null && ownerProxy !== undefined;
+  const host = request === undefined || request === null || request === record ? record : `${request} (${record})`;
   if (!known) return `${host} goes through the proxy of ${owner}, whose site it is; the proxies are not checked yet, so it is blocked for ${root} until they are`;
   return `${host} goes through the proxy of ${owner} (${ownerProxy}), whose site it is; ${root} uses ${proxy}, so it is blocked for ${root}`;
 }
@@ -73,6 +75,8 @@ function commandText(entry) {
       return entry.enabled ? "Proxy switched on" : "Proxy switched off";
     case "removeHost":
       return `Host ${entry.host} removed from ${entry.root}`;
+    case "removeSite":
+      return `Site ${entry.site} removed from ${entry.root}`;
     case "routeHere":
       return `The sites of ${(entry.hosts ?? []).join(", ")} routed through the proxy of ${entry.root}`;
     case "clearGroup":

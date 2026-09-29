@@ -374,7 +374,7 @@ test("getTabState reports the root, its group and the new hosts of a tab", async
     newHosts: 2,
     incomplete: true,
     proxyError: { time: 5, error: "net::ERR_PROXY_CONNECTION_FAILED", details: "", count: 2 },
-    conflicts: [{ host: "cdn.net", root: "a.com", owner: "b.com", proxy: null, ownerProxy: null }],
+    conflicts: [{ host: "cdn.net", request: "cdn.net", site: "cdn.net", root: "a.com", owner: "b.com", proxy: null, ownerProxy: null }],
   });
   learner.tabs.set(8, "example.org");
   assert.deepEqual(await commands.dispatch({ type: "getTabState", tabId: 8 }), { ok: true, mask: null, rootHost: null, hostCount: 0, loaded: 0, proxied: 0, newHosts: 0, incomplete: false, proxyError: null, conflicts: [] });

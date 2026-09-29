@@ -33,17 +33,19 @@ function fit() {
   }
 }
 
-// Blocked hosts are listed by the root whose proxy carries them; a few names each, the rest are in System PAC.
+// Blocked hosts are listed by site, the unit a route is decided for, with the hosts the page asked for; a few names each,
+// the rest are in System PAC.
 const LISTED_HOSTS = 3;
 
 function conflictBanner(conflicts, mask, tabId) {
   const node = element("div", "banner error");
-  const plural = conflicts.length === 1 ? "" : "s";
+  const sites = Map.groupBy(conflicts, ({ site }) => site);
+  const plural = sites.size === 1 ? "" : "s";
   const head = element("div", "head");
-  head.append(element("div", "title", `Proxy conflict: ${conflicts.length} host${plural} blocked`));
-  // Route here gives this root the sites of every blocked host of the page and reloads the page to use them.
+  head.append(element("div", "title", `Proxy conflict: ${sites.size} site${plural} blocked`));
+  // Route here gives this root every site the page is blocked from and reloads the page to use them.
   const routeHere = element("button", "small", "Route here");
-  routeHere.title = `Send ${conflicts.length === 1 ? "this site" : "these sites"} through the proxy of ${mask}; the other roots keep their hosts, blocked`;
+  routeHere.title = `Send ${sites.size === 1 ? "this site" : "these sites"} through the proxy of ${mask}; the other roots keep their hosts, blocked`;
   routeHere.addEventListener("click", async () => {
     routeHere.disabled = true;
     try {
@@ -58,18 +60,18 @@ function conflictBanner(conflicts, mask, tabId) {
   });
   head.append(routeHere);
   node.append(head);
-  const owners = Map.groupBy(conflicts, ({ owner }) => owner);
   const list = element("ul");
-  for (const [owner, items] of owners) {
+  for (const [site, items] of sites) {
     const item = element("li");
-    const hosts = items.slice(0, LISTED_HOSTS).map(({ host }) => host).join(", ");
-    const more = items.length > LISTED_HOSTS ? ` and ${items.length - LISTED_HOSTS} more` : "";
-    item.append(`${owner}${items[0].ownerProxy === null ? "" : ` (${items[0].ownerProxy})`}: `, element("span", "mono", hosts), more);
+    const { owner, ownerProxy } = items[0];
+    const requests = [...new Set(items.map(({ request }) => request))];
+    const more = requests.length > LISTED_HOSTS ? ` and ${requests.length - LISTED_HOSTS} more` : "";
+    item.append(element("span", "mono", site), ` via ${owner}${ownerProxy === null ? "" : ` (${ownerProxy})`}: `, element("span", "mono", requests.slice(0, LISTED_HOSTS).join(", ")), more);
     list.append(item);
   }
   const { proxy } = conflicts[0];
   const own = proxy === null ? "" : `This root uses ${proxy}. `;
-  const hint = `${own}Every host of a site goes through the proxy of the root that owns the site: Route here gives ${conflicts.length === 1 ? "it" : "them"} to this root and blocks the other roots instead, or use one proxy for these roots.`;
+  const hint = `${own}Every host of a site goes through the proxy of the root that owns the site: Route here gives ${sites.size === 1 ? "it" : "them"} to this root and blocks the other roots instead, or use one proxy for these roots.`;
   node.title = hint;
   node.append(list, element("div", "hint", hint));
   banners.append(node);
@@ -110,7 +112,8 @@ function showState(state, tabId) {
     box.append(row);
   }
   const conflicts = state.conflicts ?? [];
-  if (conflicts.length > 0) box.append(stat(conflicts.length, `host${plural(conflicts.length)} blocked by a proxy conflict`, "failed"));
+  const sites = new Set(conflicts.map(({ site }) => site)).size;
+  if (conflicts.length > 0) box.append(stat(sites, `site${plural(sites)} blocked by a proxy conflict`, "failed"));
   if (state.newHosts > 0) box.append(stat(state.newHosts, `new host${plural(state.newHosts)} blocked and learned`, "learned"));
   box.append(stat(state.hostCount, `host${plural(state.hostCount)} known for this root`, "total"));
 }

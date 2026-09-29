@@ -3,7 +3,7 @@ import { exportBackup, readBackup } from "../core/backup.js";
 import { buildSystemPac } from "../core/build.js";
 import { rootOf } from "../core/hosts.js";
 import { adoptLegacyGroups, aggregateGroups, pruneSeen, reconcileGroups } from "../core/groups.js";
-import { answersOf, bootstrapSites, normalizeSites, proxiesOf, releaseSites, routeSites, sharedRoutes } from "../core/routes.js";
+import { answersOf, bootstrapSites, normalizeSites, proxiesOf, releaseSites, routeSites, sharedRoutes, siteOf } from "../core/routes.js";
 import { trialAnswers, trialErrors, trialPlan } from "../core/trial.js";
 import { NO_LOG } from "./log.js";
 
@@ -83,6 +83,19 @@ export function createCommands({ store, engine, checker, learner, log = NO_LOG, 
     });
   };
 
+  // Every learned host of one site in the group, from the viewer's site row.
+  const removeSite = async ({ mask, site }) => {
+    requireString(site, "site");
+    return store.run(async (state) => {
+      requireValidUserPac(state);
+      const group = requireGroup(state, mask);
+      const kept = Object.entries(group.hosts).filter(([host]) => siteOf(host, store.psl) !== site);
+      if (kept.length === Object.keys(group.hosts).length) throw new Error(`Site ${JSON.stringify(site)} has no host in group ${JSON.stringify(mask)}`);
+      const groups = { ...state.groups, [mask]: { rootHost: group.rootHost, hosts: Object.fromEntries(kept) } };
+      return { ok: true, control: await engine.commit(rebuild(state, groups, pruneSeen(state.seen, groups))) };
+    });
+  };
+
   // Route here: the root takes the sites of these names, hosts it holds or root domains; every host of those sites, in
   // any group, then goes through its proxy.
   const routeHere = async ({ mask, hosts }) => {
@@ -149,13 +162,13 @@ export function createCommands({ store, engine, checker, learner, log = NO_LOG, 
       newHosts: learner.newHosts(tabId),
       incomplete: learner.incomplete(tabId),
       proxyError: learner.proxyError(tabId),
-      conflicts: learner.conflicts(tabId).map((item) => ({ ...item, proxy: answers[item.root] ?? null, ownerProxy: answers[item.owner] ?? null })),
+      conflicts: learner.conflicts(tabId).map((item) => ({ ...item, request: item.request ?? item.host, site: siteOf(item.host, store.psl), proxy: answers[item.root] ?? null, ownerProxy: answers[item.owner] ?? null })),
     };
   };
 
   const getRoutes = async () => ({ ok: true, roots: sharedRoutes(store.state, store.psl) });
 
-  const handlers = { saveUserPac, setEnabled, removeHost, routeHere, clearGroup, getTabState, getRoutes, exportState, importState, cancelCheck };
+  const handlers = { saveUserPac, setEnabled, removeHost, removeSite, routeHere, clearGroup, getTabState, getRoutes, exportState, importState, cancelCheck };
 
   // What a command changed, for the diagnostic log; read-only commands are not logged.
   const userPac = (message, response) => (response.ok ? { roots: response.analysis.roots.length } : { problems: response.errors?.length ?? 0, error: response.error });
@@ -164,6 +177,7 @@ export function createCommands({ store, engine, checker, learner, log = NO_LOG, 
     importState: userPac,
     setEnabled: ({ enabled }, response) => ({ enabled, error: response.error }),
     removeHost: ({ mask, host }, response) => ({ root: mask, host, error: response.error }),
+    removeSite: ({ mask, site }, response) => ({ root: mask, site, error: response.error }),
     routeHere: ({ mask, hosts }, response) => ({ root: mask, hosts, error: response.error }),
     clearGroup: ({ mask }, response) => ({ root: mask, error: response.error }),
   };
