@@ -103,7 +103,7 @@ function siteRows(mask, hosts, seen, needle, route) {
     const target = root ? mask : list[0];
     row.append(name, routeCell(mask, siteRoute, route?.blocks[site], (button) => run(button, { type: "routeHere", mask, hosts: [target] }), root));
     row.append(element("td", "muted", times(list, hosts, Math.min)), element("td", "muted", times(list, seen, Math.max)));
-    const actions = element("td");
+    const actions = element("td", "actions");
     if (list.length > 0) {
       const remove = element("button", "small", "Remove site");
       remove.title = `Remove every learned host of ${site} from ${mask}`;
@@ -115,7 +115,7 @@ function siteRows(mask, hosts, seen, needle, route) {
     const sub = (host, learned, last, action = null) => {
       const line = element("tr", "sub");
       line.append(element("td", "host", host), element("td"), element("td", "muted", learned), element("td", "muted", last));
-      const cell = element("td");
+      const cell = element("td", "actions");
       if (action !== null) cell.append(action);
       line.append(cell);
       table.append(line);

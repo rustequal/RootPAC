@@ -93,6 +93,7 @@ button.primary {
 button.small {
   padding: 3px 9px;
   font-size: 13px;
+  white-space: nowrap;
 }
 
 .row {
@@ -357,7 +358,12 @@ table.hosts th:nth-child(4) {
 }
 
 table.hosts th:nth-child(5) {
-  width: 116px;
+  width: 132px;
+}
+
+/* Remove site and Remove share one centre line, whatever their width. */
+table.hosts td.actions {
+  text-align: center;
 }
 
 /* A site row carries the route; its hosts sit under it, indented, without a border of their own. */

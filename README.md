@@ -115,6 +115,7 @@ Newest first. The TZ describes only the current version; this section is the rec
 
 | Version | Changes |
 | --- | --- |
+| 1.0.27 | System PAC viewer: button text never wraps, and the action column centres **Remove site** and **Remove** on one axis. |
 | 1.0.26 | System PAC viewer: the button that removes a whole site reads **Remove site**, the one for a single host stays **Remove**; only **Clear group** asks for confirmation. |
 | 1.0.25 | A root whose own site another root on a different proxy routes: its closed page, which never commits, now makes its tab a root tab with the proxy conflict — amber icon with `!`, the conflict and **Route here** in the popup — instead of a grey icon with nothing in the popup. The System PAC viewer's group line keeps only the root's proxy, the site and host counts and `N blocked`: the root host and `site routed by` are gone, the table shows them. |
 | 1.0.24 | Sites in the interface. The popup lists a proxy conflict by site, with the hosts the page asked for, and keeps one **Route here** for all of them; the counter shows blocked sites. The System PAC viewer lists each group by site — route, **Route here** and **Remove** once per site (`removeSite`), the learned hosts under it — and counts sites and hosts. The log names the requested host of a conflict. |
