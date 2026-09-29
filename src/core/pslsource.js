@@ -2,7 +2,7 @@ import { parsePublicSuffixList } from "./psl.js";
 
 // The only address publicsuffix.org supports for pulling the list (the file's own header).
 export const PSL_URL = "https://publicsuffix.org/list/public_suffix_list.dat";
-export const MAX_PSL_BYTES = 2 * 1024 * 1024;
+export const MAX_PSL_LENGTH = 2 * 1024 * 1024;
 
 const VERSION = /^\/\/ VERSION: (\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_UTC)$/m;
 const COMMIT = /^\/\/ COMMIT: ([0-9a-f]{40})$/m;
@@ -32,11 +32,10 @@ export function formatPslVersion(version) {
 // its VERSION, parsed, and answering the public suffixes every version has.
 export function readPublicSuffixList(text) {
   if (typeof text !== "string") throw new TypeError("Public suffix list must be a string");
-  if (text.length > MAX_PSL_BYTES) throw new Error(`Public suffix list is larger than ${MAX_PSL_BYTES} bytes`);
+  if (text.length > MAX_PSL_LENGTH) throw new Error("Public suffix list is larger than 2 MB");
   const version = pslVersion(text);
   if (version === null) throw new Error("Public suffix list has no VERSION line");
-  const lines = new Set(text.split("\n").map((line) => line.trim()));
-  if (!MARKERS.every((marker) => lines.has(marker))) throw new Error("Public suffix list is incomplete");
+  if (!MARKERS.every((marker) => text.includes(marker))) throw new Error("Public suffix list is incomplete");
   const psl = parsePublicSuffixList(text);
   const sane =
     psl.isPublicSuffix("com") &&
@@ -47,4 +46,10 @@ export function readPublicSuffixList(text) {
     psl.registrableDomain("a.bbc.co.uk") === "bbc.co.uk";
   if (!sane) throw new Error("Public suffix list gives wrong answers for well-known names");
   return { psl, version, commit: pslCommit(text) };
+}
+
+// The snapshot shipped with the extension is trusted as it is and only parsed: a service worker starts often, and the
+// checks above would add a third to its start.
+export function bundledPublicSuffixList(text) {
+  return { psl: parsePublicSuffixList(text), version: pslVersion(text), commit: pslCommit(text) };
 }

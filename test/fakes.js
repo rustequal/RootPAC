@@ -11,6 +11,11 @@ export class FakeArea {
     return structuredClone(Object.fromEntries(list.filter((key) => Object.hasOwn(this.items, key)).map((key) => [key, this.items[key]])));
   }
 
+  async getKeys() {
+    this.calls.push(["getKeys"]);
+    return Object.keys(this.items);
+  }
+
   async set(items) {
     this.calls.push(["set", Object.keys(items).sort()]);
     Object.assign(this.items, structuredClone(items));
@@ -22,7 +27,7 @@ export class FakeArea {
   }
 
   writes() {
-    return this.calls.filter(([op]) => op !== "get");
+    return this.calls.filter(([op]) => op !== "get" && op !== "getKeys");
   }
 }
 

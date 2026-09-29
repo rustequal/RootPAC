@@ -1,5 +1,5 @@
 import { analyzeUserPac } from "../core/analyze.js";
-import { PSL_URL, isNewerPsl, pslVersion, readPublicSuffixList } from "../core/pslsource.js";
+import { PSL_URL, bundledPublicSuffixList, isNewerPsl, pslVersion, readPublicSuffixList } from "../core/pslsource.js";
 import { NO_LOG } from "./log.js";
 import { PSL_KEYS, refresh } from "./store.js";
 
@@ -97,7 +97,7 @@ export function createPslUpdater({ store, engine, area, alarms, fetch, bundledUr
         }
       }
       if (chosen === null) {
-        chosen = { ...readPublicSuffixList(bundledText), source: "bundled" };
+        chosen = { ...bundledPublicSuffixList(bundledText), source: "bundled" };
         if (stored !== undefined) await area.remove([PSL_KEYS.list]).catch(ignore);
       }
       installed = { ...released(chosen), source: chosen.source };

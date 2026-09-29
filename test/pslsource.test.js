@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { MAX_PSL_BYTES, formatPslVersion, isNewerPsl, pslCommit, pslVersion, readPublicSuffixList } from "../src/core/pslsource.js";
+import { MAX_PSL_LENGTH, bundledPublicSuffixList, formatPslVersion, isNewerPsl, pslCommit, pslVersion, readPublicSuffixList } from "../src/core/pslsource.js";
 
 const BUNDLED = readFileSync(new URL("../vendor/public_suffix_list.dat", import.meta.url), "utf8");
 
@@ -31,8 +31,16 @@ test("the bundled list reads with its version and commit", () => {
 test("a list that is cut off, has no version, is too large or answers wrong is refused", () => {
   assert.throws(() => readPublicSuffixList(BUNDLED.slice(0, BUNDLED.length / 2)), /incomplete/);
   assert.throws(() => readPublicSuffixList(BUNDLED.replace(/^\/\/ VERSION: .*$/m, "")), /no VERSION/);
-  assert.throws(() => readPublicSuffixList(BUNDLED + " ".repeat(MAX_PSL_BYTES)), /larger/);
+  assert.throws(() => readPublicSuffixList(BUNDLED + " ".repeat(MAX_PSL_LENGTH)), /larger/);
   assert.throws(() => readPublicSuffixList(BUNDLED.replace(/^github\.io$/m, "")), /wrong answers/);
   assert.throws(() => readPublicSuffixList("<html>Not Found</html>"), /no VERSION/);
   assert.throws(() => readPublicSuffixList(null), /must be a string/);
+});
+
+test("the bundled snapshot is only parsed, with the same version and answers", () => {
+  const bundled = bundledPublicSuffixList(BUNDLED);
+  const checked = readPublicSuffixList(BUNDLED);
+  assert.equal(bundled.version, checked.version);
+  assert.equal(bundled.commit, checked.commit);
+  assert.equal(bundled.psl.registrableDomain("a.b.bbc.co.uk"), "bbc.co.uk");
 });

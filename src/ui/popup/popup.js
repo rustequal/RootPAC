@@ -1,4 +1,5 @@
-import { CLOSED_TEXT, INCOGNITO_TEXT, element, formatTime, incognitoAllowed, onStored, proxyErrorText, pslConflictText, readLocal, send } from "../shared/rpc.js";
+import { NOTICE_KEYS, notices } from "../shared/notices.js";
+import { INCOGNITO_TEXT, element, formatTime, incognitoAllowed, onStored, proxyErrorText, readLocal, send } from "../shared/rpc.js";
 import { header } from "../shared/logo.js";
 
 // A render builds the card and the messages off the page and puts them in at once, and only when they changed: a popup
@@ -128,8 +129,8 @@ function showState(state, tabId) {
 
 async function render() {
   const [stored, session, incognito, tabId] = await Promise.all([
-    readLocal(["enabled", "userPac", "appliedPac", "userPacErrors", "pslConflict"]),
-    chrome.storage.session.get(["lastLearnError", "armed", "startupError"]),
+    readLocal([...NOTICE_KEYS.local, "appliedPac"]),
+    chrome.storage.session.get(NOTICE_KEYS.session),
     incognitoAllowed(),
     activeTabId(),
   ]);
@@ -139,17 +140,9 @@ async function render() {
   banners = element("div");
   showState(state, tabId);
 
-  if (stored.enabled !== true) banner("Proxy is switched off for this extension");
-  if (stored.enabled === true && stored.userPac !== undefined && session.armed !== true) banner(CLOSED_TEXT);
+  for (const notice of notices(stored, session, { page: "popup" })) banner(notice.text, notice.level === "error" ? "banner error" : "banner");
   if (!incognito) banner(INCOGNITO_TEXT);
   if (stored.userPac === undefined) banner("No user PAC configured");
-  if (stored.userPacErrors !== undefined) {
-    banner("Saved user PAC no longer passes validation — protection continues with the last applied configuration. Fix it in Options");
-  }
-  if (stored.pslConflict !== undefined) banner(`${pslConflictText(stored.pslConflict)}. Fix it in Options`);
-  if (session.startupError !== undefined) banner(`RootPAC failed to start: ${session.startupError}`, "banner error");
-  const learnError = session.lastLearnError;
-  if (learnError !== undefined) banner(`${formatTime(learnError.time)} — Learning failed: ${learnError.message}`, "banner error");
   const conflicts = state?.ok ? (state.conflicts ?? []) : [];
   if (conflicts.length > 0) conflictBanner(conflicts, state.mask, tabId);
   const error = state?.ok ? state.proxyError : null;
@@ -206,7 +199,7 @@ document.getElementById("log").addEventListener("click", () => {
 });
 
 // What the popup shows: the settings, the groups (the root's known hosts) and owners, the worker's state and this tab.
-const SHOWN = new Set(["enabled", "userPac", "appliedPac", "userPacErrors", "analysis", "sites", "proxies", "lastLearnError", "armed", "startupError", "pslConflict"]);
+const SHOWN = new Set([...NOTICE_KEYS.local, ...NOTICE_KEYS.session, "appliedPac", "analysis", "sites", "proxies"]);
 
 onStored((changes) => {
   const tabKey = shownTab === null ? null : `tab:${shownTab}`;

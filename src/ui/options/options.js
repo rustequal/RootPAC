@@ -1,11 +1,13 @@
 import { formatPslVersion, isNewerPsl } from "../../core/pslsource.js";
-import { download, element, onStored, pslConflictText, readLocal, send } from "../shared/rpc.js";
+import { NOTICE_KEYS, notices, pslConflictText } from "../shared/notices.js";
+import { download, element, onStored, readLocal, readSession, send } from "../shared/rpc.js";
 import { header } from "../shared/logo.js";
 
 document.getElementById("head").replaceWith(header("User PAC"));
 
 const text = document.getElementById("text");
 const gutter = document.getElementById("gutter");
+const banners = document.getElementById("banners");
 const status = document.getElementById("status");
 const result = document.getElementById("result");
 const cancel = document.getElementById("cancel");
@@ -16,7 +18,6 @@ const logStatus = document.getElementById("logStatus");
 const pslInstalled = document.getElementById("pslInstalled");
 const pslAvailable = document.getElementById("pslAvailable");
 const pslUpdate = document.getElementById("pslUpdate");
-const pslConflict = document.getElementById("pslConflict");
 const pslAuto = document.getElementById("pslAuto");
 const pslAutoStatus = document.getElementById("pslAutoStatus");
 
@@ -48,25 +49,41 @@ function focusPosition(line, column) {
   text.setSelectionRange(offset, offset);
 }
 
-function showErrors(errors) {
+// Errors of the User PAC: a click on one puts the cursor there.
+function errorList(errors) {
   const list = element("ul", "result");
   for (const { line, column, message } of errors) {
     const item = element("li", line === null ? "error" : "error clickable", line === null ? message : `${line}:${column} ${message}`);
     if (line !== null) item.addEventListener("click", () => focusPosition(line, column));
     list.append(item);
   }
-  result.replaceChildren(element("p", "error", `${errors.length} problem${errors.length === 1 ? "" : "s"}`), list);
+  return list;
 }
 
-function showAnalysis({ roots, deny, bypass }) {
+function showErrors(errors) {
+  result.replaceChildren(element("p", "error", `${errors.length} problem${errors.length === 1 ? "" : "s"}`), errorList(errors));
+}
+
+function analysisList({ roots, deny, bypass }) {
   const describe = (name, masks) => element("li", undefined, `${name}: ${masks.length === 0 ? "—" : masks.join(", ")}`);
   const list = element("ul", "result");
   list.append(describe("roots", roots), describe("deny", deny), describe("bypass", bypass));
-  result.replaceChildren(list);
+  return list;
 }
 
+// The saved User PAC: its errors in safe mode; otherwise what it declares, under the errors it would have with a newer
+// public suffix list that is held back for them (background/pslupdate.js).
+function showResult({ analysis, userPacErrors, pslConflict }) {
+  if (userPacErrors !== undefined) showErrors(userPacErrors);
+  else if (analysis === undefined) result.replaceChildren();
+  else if (pslConflict === undefined) result.replaceChildren(analysisList(analysis));
+  else result.replaceChildren(element("p", "error", pslConflictText(pslConflict)), errorList(pslConflict.errors ?? []), analysisList(analysis));
+}
+
+const RESULT_KEYS = ["analysis", "userPacErrors", "pslConflict"];
+
 async function load(force) {
-  const stored = await readLocal(["userPac", "analysis", "userPacErrors"]);
+  const stored = await readLocal(["userPac", ...RESULT_KEYS]);
   const value = stored.userPac ?? "";
   if (force || !dirty()) {
     saved = value;
@@ -77,8 +94,7 @@ async function load(force) {
     saved = value;
     setStatus("Saved user PAC changed elsewhere");
   }
-  if (stored.userPacErrors !== undefined) showErrors(stored.userPacErrors);
-  else if (stored.analysis !== undefined) showAnalysis(stored.analysis);
+  showResult(stored);
 }
 
 async function save() {
@@ -93,7 +109,7 @@ async function save() {
     if (response.ok) {
       saved = value;
       setStatus("Saved", "ok");
-      showAnalysis(response.analysis);
+      showResult(await readLocal(RESULT_KEYS));
     } else if (response.errors !== undefined) {
       setStatus("");
       showErrors(response.errors);
@@ -211,7 +227,7 @@ function showAvailable() {
     if (available.version === installed.version) setAvailable(`${pslText(available)} · up to date`, "ok");
     else setAvailable(`${pslText(available)} · the installed list is newer`, "muted");
   } else if (conflict?.version === available.version) {
-    setAvailable(`${pslText(available)} · not installed, see below`, "error");
+    setAvailable(`${pslText(available)} · not installed, see the User PAC errors above`, "error");
   } else {
     setAvailable(`${pslText(available)} · newer`, "", true);
   }
@@ -223,16 +239,6 @@ function showInstalled(installed, conflict) {
   if (conflict !== undefined) psl.conflict = conflict;
   pslInstalled.textContent = `${pslText(installed)} · ${installed.source === "downloaded" ? "downloaded" : "bundled with RootPAC"}`;
   showAvailable();
-}
-
-function showPslConflict(conflict) {
-  if (conflict === undefined || conflict === null) {
-    pslConflict.replaceChildren();
-    return;
-  }
-  const list = element("ul", "result");
-  for (const { line, column, message } of conflict.errors ?? []) list.append(element("li", "error", line === null ? message : `${line}:${column} ${message}`));
-  pslConflict.replaceChildren(element("p", "error", `${pslConflictText(conflict)}. Fix the User PAC above, and the list is installed when it is saved.`), list);
 }
 
 async function checkPsl() {
@@ -267,13 +273,42 @@ pslUpdate.addEventListener("click", async () => {
   }
 });
 
+// Notices on top of the page (ui/shared/notices.js): what keeps the saved User PAC from working as written. Built off the
+// page and put in only when they changed, so a storage write that changes nothing does not redraw them.
+const ACTIONS = {
+  errors: (notice) => {
+    const first = notice.errors.find(({ line }) => line !== null);
+    const button = element("button", "small", first === undefined ? "Show" : `Go to line ${first.line}`);
+    // Where it goes is part of the markup a redraw compares.
+    if (first !== undefined) button.dataset.at = `${first.line}:${first.column}`;
+    button.addEventListener("click", () => {
+      if (first === undefined) result.scrollIntoView({ block: "nearest" });
+      else focusPosition(first.line, first.column);
+    });
+    return button;
+  },
+};
+
+function noticeNode(notice) {
+  const className = notice.level === "error" ? "banner error" : "banner";
+  if (notice.action === undefined) return element("p", className, notice.text);
+  const node = element("div", className);
+  const head = element("div", "head");
+  head.append(element("span", undefined, notice.text), ACTIONS[notice.action](notice));
+  node.append(head);
+  return node;
+}
+
+async function loadBanners() {
+  const [local, session] = await Promise.all([readLocal(NOTICE_KEYS.local), readSession(NOTICE_KEYS.session)]);
+  const built = element("div");
+  built.append(...notices(local, session, { page: "options" }).map(noticeNode));
+  if (built.innerHTML !== banners.innerHTML) banners.replaceChildren(...built.childNodes);
+}
+
 async function loadPsl() {
-  const [{ pslAutoUpdate, pslConflict: conflict }, status] = await Promise.all([
-    readLocal(["pslAutoUpdate", "pslConflict"]),
-    send({ type: "getPsl" }).catch(() => null),
-  ]);
+  const [{ pslAutoUpdate }, status] = await Promise.all([readLocal(["pslAutoUpdate"]), send({ type: "getPsl" }).catch(() => null)]);
   pslAuto.checked = pslAutoUpdate !== false;
-  showPslConflict(conflict);
   if (status?.ok) showInstalled(status.installed, status.conflict);
 }
 
@@ -286,11 +321,18 @@ pslAuto.addEventListener("change", () => {
   });
 });
 
+const follows = (keys, changes) => keys.some((key) => Object.hasOwn(changes, key));
+
 onStored((changes, area) => {
-  if (area === "local" && ("userPac" in changes || "userPacErrors" in changes || "analysis" in changes)) load(false);
+  if (follows(NOTICE_KEYS[area], changes)) loadBanners();
+  if (area === "local" && follows(["userPac", "userPacErrors", "analysis"], changes)) load(false);
+  // A list conflict set or cleared in the background changes only the result panel, not the editor or its status.
+  else if (area === "local" && follows(["pslConflict"], changes)) readLocal(RESULT_KEYS).then(showResult);
   if (area === "local" && "logEnabled" in changes) loadLogSetting();
-  if (area === "local" && ("pslList" in changes || "pslConflict" in changes || "pslAutoUpdate" in changes)) loadPsl();
+  if (area === "local" && follows(["pslList", "pslConflict", "pslAutoUpdate"], changes)) loadPsl();
 });
+
+loadBanners();
 
 loadLogSetting();
 

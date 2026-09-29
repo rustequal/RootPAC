@@ -208,10 +208,16 @@ test("the weekly alarm follows the switch and counts the week from the last week
   assert.equal(area.items[PSL_KEYS.checked], 12 * week);
 });
 
-test("the public suffix list settings are not routing state", async () => {
-  const items = { [PSL_KEYS.auto]: false, [PSL_KEYS.checked]: 1, [PSL_KEYS.conflict]: { version: NEW, commit: null, errors: [] } };
+test("the public suffix list settings are not routing state, and loading the store does not read them", async () => {
+  const items = { [PSL_KEYS.auto]: false, [PSL_KEYS.checked]: 1, [PSL_KEYS.conflict]: { version: NEW, commit: null, errors: [] }, [PSL_KEYS.list]: { version: NEW, commit: null, text: "x", installedAt: 1 } };
   const area = new FakeArea(items);
   const state = await new Store(area, new FakeArea()).load(PSL);
   assert.equal(state.enabled, true);
   assert.equal(area.items[PSL_KEYS.auto], false);
+  const read = area.calls.filter(([op]) => op === "get").flatMap(([, keys]) => keys ?? ["everything"]);
+  assert.deepEqual(read, []);
+
+  const trained = new FakeArea({ ...items, schemaVersion: 1, enabled: false });
+  await new Store(trained, new FakeArea({ stateVerified: true })).load(PSL);
+  assert.deepEqual(trained.calls.filter(([op]) => op === "get").map(([, keys]) => keys), [["schemaVersion", "enabled"]]);
 });

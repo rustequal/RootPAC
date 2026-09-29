@@ -4,6 +4,7 @@
 <link rel="stylesheet" href="../shared/ui.css">
 <body style="max-width: 960px; margin: 0 auto">
 <div id="head"></div>
+<div id="banners" class="messages"></div>
 <div class="editor">
   <pre id="gutter" class="gutter">1</pre>
   <textarea id="text" rows="22" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea>
@@ -25,7 +26,6 @@
 <h2>Public Suffix List</h2>
 <div class="row psl"><span class="muted">Installed</span><span id="pslInstalled" class="mono"></span></div>
 <div class="row psl"><span class="muted">Available</span><span id="pslAvailable" class="mono"></span><button id="pslUpdate" class="small" hidden>Update</button></div>
-<div id="pslConflict"></div>
 <div class="row" style="margin-top: 6px">
   <label class="check"><input id="pslAuto" type="checkbox"> Check and update weekly in the background</label>
   <span id="pslAutoStatus" class="muted"></span>
