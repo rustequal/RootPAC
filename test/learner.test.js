@@ -376,6 +376,16 @@ test("hosts that actually load in the tab are counted, blocked ones are not", as
   assert.equal(learner.newHosts(TAB), 0);
 });
 
+test("the page counters count hosts, not requests", async () => {
+  const { learner } = await setup();
+  commit(learner);
+  for (let i = 0; i < 20; i++) learner.onResponse(request(learner, `https://i.instagram.com/${i}.png`));
+  for (let i = 0; i < 5; i++) learner.onResponse(request(learner, `wss://i.instagram.com/socket${i}`));
+  learner.onResponse(request(learner, "https://www.instagram.com/api"));
+  await settled(learner);
+  assert.deepEqual([learner.loaded(TAB), learner.proxied(TAB)], [2, 2]);
+});
+
 test("the root's hosts and its page document count as loaded through the proxy", async () => {
   const { learner } = await setup();
   commit(learner);
