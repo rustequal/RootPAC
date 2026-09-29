@@ -368,7 +368,7 @@ test("getTabState reports the root, its group and the new hosts of a tab", async
     ok: true,
     mask: "a.com",
     rootHost: "www.a.com",
-    hostCount: 3,
+    hostCount: 4,
     loaded: 9,
     proxied: 5,
     newHosts: 2,

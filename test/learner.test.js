@@ -376,14 +376,31 @@ test("hosts that actually load in the tab are counted, blocked ones are not", as
   assert.equal(learner.newHosts(TAB), 0);
 });
 
-test("the page host and other hosts of the root mask are not counted", async () => {
+test("the root's hosts and its page document count as loaded through the proxy", async () => {
   const { learner } = await setup();
   commit(learner);
-  request(learner, "https://i.instagram.com/logo.png");
+  learner.onResponse(request(learner, "https://i.instagram.com/logo.png"));
   await settled(learner);
+  assert.deepEqual([learner.loaded(TAB), learner.proxied(TAB), learner.newHosts(TAB)], [1, 1, 0]);
+  // The document answers before its page commits: it counts for the new page.
+  const main = { requestId: "doc1", type: "main_frame", tabId: TAB, url: "https://www.instagram.com/p/1", documentLifecycle: "active", timeStamp: 1 };
+  learner.onRequest(main);
+  learner.onResponse(main);
+  commit(learner, TAB, "https://www.instagram.com/p/1");
+  assert.deepEqual([learner.loaded(TAB), learner.proxied(TAB)], [1, 1]);
+  // The document answers after its page commits.
+  const late = { ...main, requestId: "doc2", url: "https://www.instagram.com/p/2" };
+  learner.onRequest(late);
+  commit(learner, TAB, "https://www.instagram.com/p/2");
   assert.equal(learner.loaded(TAB), 0);
-  assert.equal(learner.proxied(TAB), 0);
-  assert.equal(learner.newHosts(TAB), 0);
+  learner.onResponse(late);
+  assert.deepEqual([learner.loaded(TAB), learner.proxied(TAB)], [1, 1]);
+  // A document of another site does not count for a page that commits later.
+  const other = { ...main, requestId: "doc3", url: "https://www.instagram.com/p/3" };
+  learner.onRequest(other);
+  learner.onResponse(other);
+  commit(learner, TAB, "https://example.org/");
+  assert.equal(learner.loaded(TAB), 0);
 });
 
 test("loaded hosts follow a replaced tab and are restored from the session", async () => {

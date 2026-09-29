@@ -25,6 +25,8 @@ const blankTab = (host) => ({ host, navigation: 0, newHosts: 0, loaded: new Set(
 
 export function createLearner({ store, engine, session, tabs: browserTabs, now, log = NO_LOG }) {
   const tabs = new Map();
+  // Root documents that answered before their page committed, by tab.
+  const documents = new Map();
   const tracked = new Map();
   const pending = new Map();
   const observed = new Map();
@@ -215,7 +217,14 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
 
   const resetTab = (tabId, url) => {
     const previous = tabs.get(tabId);
-    tabs.set(tabId, { ...blankTab(hostFromUrl(url)), navigation: (previous?.navigation ?? 0) + 1, loading: true });
+    const tab = { ...blankTab(hostFromUrl(url)), navigation: (previous?.navigation ?? 0) + 1, loading: true };
+    // The root document that answered before its page committed is the page's first loaded host.
+    if (documents.get(tabId) === tab.host) {
+      tab.loaded.add(tab.host);
+      tab.proxied.add(tab.host);
+    }
+    documents.delete(tabId);
+    tabs.set(tabId, tab);
     changed(tabId);
   };
 
@@ -470,7 +479,7 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
         const host = hostFromUrl(details.url);
         const mask = learning(state) && host !== null ? rootOf(host, state.analysis.roots) : null;
         if (mask === null) return;
-        track(details, { main: true, url: details.url });
+        track(details, { main: true, url: details.url, navigation: tabs.get(details.tabId)?.navigation ?? 0 });
         return;
       }
       const host = hostFromUrl(details.url);
@@ -481,7 +490,8 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
       const learned = hostRoot === null ? learnedOwner(host, index, store.psl) : null;
       const tab = details.tabId >= 0 ? tabs.get(details.tabId) : undefined;
       if (tab !== undefined && rootOfHost(tab.host ?? null, roots) !== null) {
-        const via = hostRoot !== null ? null : learned !== null ? "proxy" : firstMatch(host, bypass) !== null ? "direct" : undefined;
+        // A root's hosts, like learned ones, go only through a proxy: the System PAC refuses DIRECT for them.
+        const via = hostRoot !== null || learned !== null ? "proxy" : firstMatch(host, bypass) !== null ? "direct" : undefined;
         if (via !== undefined) track(details, { host, via, navigation: tab.navigation });
       }
       const source = attribute(details, roots);
@@ -539,7 +549,16 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
 
     onResponse(details) {
       const entry = settled(details);
-      if (entry === null || entry.main || entry.via === null || !current(entry.tabId, entry.navigation)) return;
+      if (entry === null) return;
+      // A root document goes through the root's proxy; it counts for its page, which may commit before or after this.
+      if (entry.main) {
+        const host = hostFromUrl(entry.url);
+        const tab = tabs.get(entry.tabId);
+        if (tab !== undefined && tab.navigation > entry.navigation && tab.host === host) markLoaded(entry.tabId, host, true);
+        else if (host !== null) documents.set(entry.tabId, host);
+        return;
+      }
+      if (!current(entry.tabId, entry.navigation)) return;
       markLoaded(entry.tabId, entry.host, entry.via === "proxy");
     },
 
@@ -600,6 +619,7 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
 
     onRemoved(tabId) {
       awaitingPac.delete(tabId);
+      documents.delete(tabId);
       if (tabs.delete(tabId)) saveTab(tabId);
     },
   };

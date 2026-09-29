@@ -221,13 +221,13 @@ test("the viewer gets each root's proxy, the owner of its site and the hosts it 
     roots: {
       "facebook.com": {
         proxy: "PROXY fb:1",
-        siteOwner: "facebook.com",
+        root: { site: "facebook.com", owner: "facebook.com", verdict: "same", ownerProxy: "PROXY fb:1" },
         records: { "fbcdn.net": { site: "fbcdn.net", owner: "instagram.com", verdict: "conflict", ownerProxy: "PROXY ig:1" } },
         blocks: {},
       },
       "instagram.com": {
         proxy: "PROXY ig:1",
-        siteOwner: "instagram.com",
+        root: { site: "instagram.com", owner: "instagram.com", verdict: "same", ownerProxy: "PROXY ig:1" },
         records: { "fbcdn.net": { site: "fbcdn.net", owner: "instagram.com", verdict: "same", ownerProxy: "PROXY ig:1" } },
         blocks: { "fbcdn.net": ["facebook.com"] },
       },

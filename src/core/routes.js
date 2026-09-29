@@ -229,27 +229,30 @@ export function routedGroups(groups, sites, roots, psl) {
   return { routed, pacRoots };
 }
 
-// For the viewer: each root's proxy, the owner of its own site, the site, owner and verdict of every host it holds,
-// and for the sites it owns, the roots a proxy conflict blocks.
+// For the viewer: each root's proxy, the site, owner and verdict of its own domain and of every host it holds, and for
+// the sites it owns, the roots a proxy conflict blocks.
 export function sharedRoutes(state, psl) {
   const answers = answersOf(state);
   const { groups } = state;
   const sites = sitesOfState(state, Object.keys(groups), psl);
   const roots = Object.fromEntries(
-    Object.keys(groups).map((mask) => [mask, { proxy: answers[mask] ?? null, siteOwner: ownerOf(sites, mask, psl) ?? null, records: {}, blocks: {} }]),
+    Object.keys(groups).map((mask) => [mask, { proxy: answers[mask] ?? null, root: null, records: {}, blocks: {} }]),
   );
+  const routeOf = (mask, name) => {
+    const owner = ownerOf(sites, name, psl);
+    return { site: siteOf(name, psl), owner: owner ?? null, verdict: verdict(mask, owner, answers), ownerProxy: owner === undefined ? null : (answers[owner] ?? null) };
+  };
   const block = (owner, site, mask) => {
     if (!Object.hasOwn(roots, owner)) return;
     const blocked = (roots[owner].blocks[site] ??= []);
     if (!blocked.includes(mask)) blocked.push(mask);
   };
   for (const mask of Object.keys(groups)) {
+    roots[mask].root = routeOf(mask, mask);
     for (const host of Object.keys(groups[mask].hosts)) {
-      const site = siteOf(host, psl);
-      const owner = ownerOf(sites, host, psl);
-      const result = verdict(mask, owner, answers);
-      roots[mask].records[host] = { site, owner: owner ?? null, verdict: result, ownerProxy: owner === undefined ? null : (answers[owner] ?? null) };
-      if (result === CONFLICT) block(owner, site, mask);
+      const route = routeOf(mask, host);
+      roots[mask].records[host] = route;
+      if (route.verdict === CONFLICT) block(route.owner, route.site, mask);
     }
   }
   for (const root of Object.values(roots)) for (const masks of Object.values(root.blocks)) masks.sort();
