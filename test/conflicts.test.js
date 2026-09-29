@@ -296,6 +296,28 @@ test("a root's domain is blocked in the pages of a root on another proxy and rep
   assert.equal(allowed(browser, "www.instagram.com", null, null, "main_frame"), true);
 });
 
+test("a root page closed by Route here shows the conflict in its tab, though the page never commits", async () => {
+  const { learner, resolver, commands } = await setup(userPac("PROXY fb:1", "PROXY ig:1"));
+  visit(learner, "https://www.facebook.com/");
+  await idle(learner, resolver);
+  assert.equal((await commands.dispatch({ type: "routeHere", mask: "instagram.com", hosts: ["facebook.com"] })).ok, true);
+  const tabId = TAB + 1;
+  const details = { requestId: "closed", type: "main_frame", tabId, url: "https://www.facebook.com/", documentLifecycle: "active", timeStamp: 1 };
+  learner.onRequest(details);
+  learner.onError({ ...details, error: "net::ERR_BLOCKED_BY_CLIENT" });
+  assert.equal(learner.tabHost(tabId), "www.facebook.com");
+  assert.equal(learner.loading(tabId), false);
+  assert.deepEqual(learner.conflicts(tabId), [{ host: "facebook.com", request: "www.facebook.com", root: "facebook.com", owner: "instagram.com" }]);
+  const state = await commands.dispatch({ type: "getTabState", tabId });
+  assert.equal(state.mask, "facebook.com");
+  assert.deepEqual(state.conflicts.map(({ site, proxy, ownerProxy }) => ({ site, proxy, ownerProxy })), [{ site: "facebook.com", proxy: "PROXY fb:1", ownerProxy: "PROXY ig:1" }]);
+  // Route here from the popup takes the site back, and the reload is a page of its own again.
+  assert.equal((await commands.dispatch({ type: "routeHere", mask: "facebook.com", hosts: state.conflicts.map(({ host }) => host) })).ok, true);
+  learner.onRequest({ ...details, requestId: "again" });
+  learner.onCommitted({ tabId, frameId: 0, url: details.url, documentLifecycle: "active" });
+  assert.deepEqual(learner.conflicts(tabId), []);
+});
+
 test("a removed root takes its sites with it: every root forgets their hosts and learns them anew", async () => {
   const text = userPacOf({ "facebook.com": "PROXY fb:1", "instagram.com": "PROXY ig:1", "threads.com": "PROXY fb:1" });
   const { store, browser, learner, resolver, commands } = await setup(text);

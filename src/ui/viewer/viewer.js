@@ -147,15 +147,12 @@ function renderGroups() {
     box.open = needle !== "" || open.has(mask);
     const summary = element("summary");
     summary.append(element("span", "mask", mask));
-    const proxy = group.rootHost === null ? "" : ` · ${route?.proxy ?? "proxy not checked yet"}`;
+    // The root's proxy and counts only: which sites are blocked and through which roots they go is in the table.
     const siteCount = sitesOf(mask, group.hosts, route).length;
-    const info = element("span", "muted grow", `${group.rootHost ?? "no root host yet"}${proxy} · ${siteCount} site${siteCount === 1 ? "" : "s"}, ${hosts.length + 1} host${hosts.length === 0 ? "" : "s"}`);
+    const info = element("span", "muted grow", `${route?.proxy ?? "proxy not checked yet"} · ${siteCount} site${siteCount === 1 ? "" : "s"}, ${hosts.length + 1} host${hosts.length === 0 ? "" : "s"}`);
     const blocked = blockedCount(mask, group.hosts, route);
-    if (blocked > 0) info.append(element("span", "error", ` · ${blocked} site${blocked === 1 ? "" : "s"} blocked by a proxy conflict`));
+    if (blocked > 0) info.append(element("span", "error", ` · ${blocked} blocked`));
     summary.append(info);
-    // The root's own site handed to another root: the root's pages go through that root's proxy, or are closed.
-    const siteOwner = route?.root?.owner ?? mask;
-    if (siteOwner !== mask) info.append(element("span", "warn", ` · site routed by ${siteOwner}`));
     const clear = element("button", "small", "Clear group");
     clear.addEventListener("click", async (event) => {
       event.preventDefault();

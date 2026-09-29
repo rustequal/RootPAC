@@ -229,6 +229,16 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
     changed(tabId);
   };
 
+  // A root page closed because its site goes through another root: the tab shows that root's page as blocked by a
+  // proxy conflict, or, while the proxies are not checked yet, as loaded before protection was ready.
+  const closePage = ({ tabId, url, closed }) => {
+    resetTab(tabId, url);
+    const tab = tabs.get(tabId);
+    tab.loading = false;
+    if (closed.verdict === CONFLICT) markConflict({ mask: closed.entry, tabId, navigation: tab.navigation }, closed, store.state, tab.host);
+    else markIncomplete(tabId);
+  };
+
   const count = (accepted) => {
     const counted = new Set();
     for (const { tabId, navigation } of accepted) {
@@ -480,7 +490,11 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
         const host = hostFromUrl(details.url);
         const mask = learning(state) && host !== null ? rootOf(host, state.analysis.roots) : null;
         if (mask === null) return;
-        track(details, { main: true, url: details.url, navigation: tabs.get(details.tabId)?.navigation ?? 0 });
+        // A root that handed its own site to a root on another proxy has its pages closed (core/rules.js): the page
+        // never commits, so the blocked load itself tells the tab which root it is and why.
+        const route = routeFor(mask, mask, state);
+        const closed = route.verdict === SAME ? null : route;
+        track(details, { main: true, url: details.url, navigation: tabs.get(details.tabId)?.navigation ?? 0, closed });
         return;
       }
       const host = hostFromUrl(details.url);
@@ -583,6 +597,10 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
       }
       if (entry !== null && PROXY_FAILURE.test(details.error ?? "")) {
         failProxy(entry, details);
+        return;
+      }
+      if (entry?.main && entry.closed !== null && details.error === BLOCKED) {
+        closePage(entry);
         return;
       }
       if (entry === null || details.error !== BLOCKED || !engine.blockedBeforeOpen(entry.time)) return;
