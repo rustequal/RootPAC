@@ -41,7 +41,7 @@ const navigate = (learner, url, tabId = TAB, extra = {}) => {
   learner.onCommitted({ tabId, frameId: 0, url, documentLifecycle });
 };
 
-const tabRecord = (fields) => ({ host: null, navigation: 0, newHosts: 0, loaded: [], proxied: [], loading: false, incomplete: false, proxyError: null, conflicts: [], ...fields });
+const tabRecord = (fields) => ({ host: null, blocked: false, navigation: 0, newHosts: 0, loaded: [], proxied: [], loading: false, incomplete: false, proxyError: null, conflicts: [], ...fields });
 const storedTabs = async (session) =>
   Object.fromEntries(Object.entries(await session.get(null)).flatMap(([key, value]) => (key.startsWith("tab:") ? [[key.slice(4), value]] : [])));
 const storedTab = async (session, tabId) => (await storedTabs(session))[tabId];

@@ -21,7 +21,12 @@ const TAB = "tab:";
 
 const IGNORED_LIFECYCLES = new Set(["prerender", "cached", "pending_deletion"]);
 
-const blankTab = (host) => ({ host, navigation: 0, newHosts: 0, loaded: new Set(), proxied: new Set(), loading: false, incomplete: false, proxyError: null, conflicts: [] });
+const blankTab = (host) => ({ host, blocked: false, navigation: 0, newHosts: 0, loaded: new Set(), proxied: new Set(), loading: false, incomplete: false, proxyError: null, conflicts: [] });
+
+// The page whose requests a tab makes. A root document blocked by DNR never commits: the tab shows an error page, which
+// loads nothing, and whatever it shows next without a commit the learner sees (Chrome's New Tab Page, after Back) is not
+// that root's page. Such a tab keeps its root for the popup and the icon, but lends no page to requests.
+const pageOf = (tab) => (tab === undefined || tab.blocked ? null : tab.host);
 
 export function createLearner({ store, engine, session, tabs: browserTabs, now, log = NO_LOG }) {
   const tabs = new Map();
@@ -229,12 +234,19 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
     changed(tabId);
   };
 
+  // A root document blocked by DNR: the tab is that root's, showing an error page (pageOf).
+  const blockPage = (tabId, url) => {
+    resetTab(tabId, url);
+    const tab = tabs.get(tabId);
+    tab.blocked = true;
+    tab.loading = false;
+    return tab;
+  };
+
   // A root page closed because its site goes through another root: the tab shows that root's page as blocked by a
   // proxy conflict, or, while the proxies are not checked yet, as loaded before protection was ready.
   const closePage = ({ tabId, url, closed }) => {
-    resetTab(tabId, url);
-    const tab = tabs.get(tabId);
-    tab.loading = false;
+    const tab = blockPage(tabId, url);
     if (closed.verdict === CONFLICT) markConflict({ mask: closed.entry, tabId, navigation: tab.navigation }, closed, store.state, tab.host);
     else markIncomplete(tabId);
   };
@@ -275,7 +287,7 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
     const inTab = tabId >= 0;
     const tab = inTab ? tabs.get(tabId) : undefined;
     const origin = originOf(initiator, roots);
-    const page = frameId === 0 && origin !== null ? origin : (tab?.host ?? null);
+    const page = frameId === 0 && origin !== null ? origin : pageOf(tab);
     const byPage = rootOfHost(page, roots);
     const mask = byPage ?? rootOfHost(origin, roots);
     if (mask === null) return null;
@@ -504,7 +516,7 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
       const hostRoot = rootOfHost(host, roots);
       const learned = hostRoot === null ? learnedOwner(host, index, store.psl) : null;
       const tab = details.tabId >= 0 ? tabs.get(details.tabId) : undefined;
-      if (tab !== undefined && rootOfHost(tab.host ?? null, roots) !== null) {
+      if (rootOfHost(pageOf(tab), roots) !== null) {
         // A root's hosts, like learned ones, go only through a proxy: the System PAC refuses DIRECT for them.
         const via = hostRoot !== null || learned !== null ? "proxy" : firstMatch(host, bypass) !== null ? "direct" : undefined;
         if (via !== undefined) track(details, { host, via, navigation: tab.navigation });
@@ -605,7 +617,7 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
       }
       if (entry === null || details.error !== BLOCKED || !engine.blockedBeforeOpen(entry.time)) return;
       if (entry.main) {
-        resetTab(entry.tabId, entry.url);
+        blockPage(entry.tabId, entry.url);
         markIncomplete(entry.tabId);
       } else if (current(entry.tabId, entry.navigation)) {
         markIncomplete(entry.tabId);

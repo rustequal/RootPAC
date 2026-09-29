@@ -361,9 +361,15 @@ table.hosts th:nth-child(5) {
   width: 132px;
 }
 
-/* Remove site and Remove share one centre line, whatever their width. */
+/* Clear group, Remove site and Remove are one width and share the right edge of the group, so they line up in one
+   column: the cell's padding matches the summary's. */
 table.hosts td.actions {
-  text-align: center;
+  text-align: right;
+}
+
+details summary > button,
+table.hosts td.actions > button {
+  min-width: 8em;
 }
 
 /* A site row carries the route; its hosts sit under it, indented, without a border of their own. */

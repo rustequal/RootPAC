@@ -299,7 +299,7 @@ test("a root's domain is blocked in the pages of a root on another proxy and rep
 });
 
 test("a root page closed by Route here shows the conflict in its tab, though the page never commits", async () => {
-  const { learner, resolver, commands } = await setup(userPac("PROXY fb:1", "PROXY ig:1"));
+  const { store, learner, resolver, commands } = await setup(userPac("PROXY fb:1", "PROXY ig:1"));
   visit(learner, "https://www.facebook.com/");
   await idle(learner, resolver);
   assert.equal((await commands.dispatch({ type: "routeHere", mask: "instagram.com", hosts: ["facebook.com"] })).ok, true);
@@ -320,6 +320,11 @@ test("a root page closed by Route here shows the conflict in its tab, though the
   const state = await commands.dispatch({ type: "getTabState", tabId });
   assert.equal(state.mask, "facebook.com");
   assert.deepEqual(state.conflicts.map(({ site, proxy, ownerProxy }) => ({ site, proxy, ownerProxy })), [{ site: "facebook.com", proxy: "PROXY fb:1", ownerProxy: "PROXY ig:1" }]);
+  // The error page loads nothing; what the tab shows next without a commit (the New Tab Page after Back, with its Google
+  // frames) is not facebook.com's page, and teaches facebook.com nothing.
+  learner.onRequest({ requestId: "ntp", type: "script", tabId, frameId: 1, url: "https://www.gstatic.com/a.js", initiator: "https://ogs.example.org", documentLifecycle: "active", timeStamp: 2 });
+  await settled(learner, resolver);
+  assert.deepEqual(Object.keys(store.state.groups["facebook.com"].hosts), []);
   // Route here from the popup takes the site back, and the reload is a page of its own again.
   assert.equal((await commands.dispatch({ type: "routeHere", mask: "facebook.com", hosts: state.conflicts.map(({ host }) => host) })).ok, true);
   learner.onRequest({ ...details, requestId: "again" });
