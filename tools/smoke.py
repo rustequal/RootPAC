@@ -294,9 +294,10 @@ async def check_ui(context, worker, page, user_pac, failures):
     if back is None or "options.html" not in back:
         failures.append(f"viewer does not link back to Options: {back!r}")
     await viewer.click("details summary")
-    await viewer.wait_for_selector("details table tr td button")
-    host = await viewer.text_content("details table tr:nth-child(2) td")
-    await viewer.click("details table tr:nth-child(2) td button")
+    await viewer.wait_for_selector("details table tr.site td.actions button")
+    row = viewer.locator("details table tr.site", has=viewer.locator("td.actions button")).first
+    host = await row.evaluate("row => row.querySelector('td.host').firstChild.textContent")
+    await row.locator("td.actions button").click()
     await asyncio.sleep(1)
     hosts = (await worker.evaluate("chrome.storage.local.get('group:root.test')"))["group:root.test"]["hosts"]
     print(f"ui viewer removed {host}, left {sorted(hosts)}")
@@ -392,8 +393,9 @@ async def check_shared_cdn(worker, page, failures):
     await asyncio.sleep(1)
     status = await fresh_request(page, "http://e.shared.test:8080/e")
     print(f"shared CDN legacy import: {imported.get('ok')}, groups {both}, shared.test in DNR x{domains.count('shared.test')}, e.shared.test {status}")
-    # Each root allows its own copy of the record, once for its pages and once for its frames.
-    if not imported.get("ok") or "shared.test" not in both.get("root.test", []) or both.get("root2.test") != ["shared.test"] or domains.count("shared.test") != 4:
+    # Records merge into their nearest common parent (4.8): a.fna and b.fna into fna.shared.test in root.test, c and
+    # d.xx into shared.test in root2.test. Each root allows its records once for its pages and once for its frames.
+    if not imported.get("ok") or "fna.shared.test" not in both.get("root.test", []) or both.get("root2.test") != ["shared.test"] or domains.count("shared.test") != 2 or domains.count("fna.shared.test") != 2:
         failures.append(f"a shared record in two groups was not built: {imported}, {both}, {domains}")
     if status != "loaded" or "http://e.shared.test:8080/e" not in proxied:
         failures.append(f"a node of a record shared by two groups was not proxied: {status}")

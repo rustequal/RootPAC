@@ -75,7 +75,8 @@ The unit tests (`node --test`) cover the core: User PAC analysis, System PAC gen
 
 | Tool | Purpose | Usage |
 | --- | --- | --- |
-| `tools/smoke.py` | end-to-end check in a real Chromium: local proxy and origins, learning, blocking, counters, restart. Needs Python 3 and [Playwright](https://playwright.dev/python/) | `python3 tools/smoke.py [extension-folder]` |
+| `tools/smoke.py` | end-to-end check in a real Chromium 145+: local proxy and origins, learning, blocking, counters, restart. Needs Python 3 and [Playwright](https://playwright.dev/python/) | `python3 tools/smoke.py [extension-folder]` |
+| `tools/stress.py` | heavy root traffic in Chromium while hosts are learned, the Public Suffix List changes, the User PAC is saved and a site is removed; counts direct connections and checks the NetLog | `python3 tools/stress.py [extension-folder] --duration 60` |
 | `tools/fuzz_groups.mjs` | fuzzes host grouping, the System PAC and DNR rules with hostile hosts and masks; no browser | `node tools/fuzz_groups.mjs [seeds runs steps]` |
 | `tools/check_netlog.py` | finds direct connections that must not happen, in a NetLog recorded at `chrome://net-export`; the backup comes from **Export** in Options | `python3 tools/check_netlog.py netlog.json --backup rootpac-backup.json` |
 | `tools/make_icons.py` | rasterizes the PNG icons from `icons/icon.svg` (needs Playwright) | `python3 tools/make_icons.py` |
@@ -91,7 +92,7 @@ src/offscreen/       offscreen document bridging to the sandbox
 src/ui/              popup, options, System PAC viewer, diagnostic log
 vendor/              acorn, Chromium's PAC library, Public Suffix List snapshot (newer lists are downloaded at run time)
 test/                unit tests and fixtures
-tools/               smoke test, fuzzer, NetLog check, icon generator
+tools/               smoke test, stress stand, fuzzer, NetLog check, icon generator
 docs/USER-GUIDE.md   user guide
 ```
 
