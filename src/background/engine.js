@@ -1,12 +1,12 @@
 import { systemPacOf } from "../core/build.js";
-import { droppedRoutes, heldOf, heldRoutes, pacRoutes, sameHeld } from "../core/held.js";
+import { LISTED, droppedRoutes, heldOf, heldRoutes, loggedRoutes, pacRoutes, sameHeld } from "../core/held.js";
 import { buildRules, closedPolicy, intersectPolicies, policyOf } from "../core/rules.js";
 import { NO_LOG } from "./log.js";
 
 const configured = (state) => state.enabled && state.appliedPac !== null;
 
 // Without requests to count (unit tests of other parts), nothing is on its way and no route is held.
-export const NO_TRAFFIC = Object.freeze({ drained: () => true, hold() {} });
+export const NO_TRAFFIC = Object.freeze({ drained: () => true, since: () => null, hold() {} });
 
 export function createEngine({ store, proxy, dnr, session, traffic = NO_TRAFFIC, now = Date.now, log = NO_LOG }) {
   // The policy of the DNR rules in force and the routes of the PAC in force.
@@ -50,6 +50,44 @@ export function createEngine({ store, proxy, dnr, session, traffic = NO_TRAFFIC,
   // The held routes the traffic may release: only those a later commit can take out of the PAC.
   const releasable = (state) => (configured(state) && state.userPacErrors === null ? heldRoutes(state.held) : []);
 
+  // Log entries for a change of the held routes, made before the commit (the traffic moves on while it applies) and
+  // added once it is applied. A route leaves the held ones drained, routed again by the configuration, with its root,
+  // or because nothing goes through the proxy any more.
+  const heldChanges = (before, next) => {
+    const was = heldRoutes(before);
+    const is = heldRoutes(next.held);
+    const key = ({ mask, name }) => `${mask} ${name}`;
+    const known = new Set(was.map(key));
+    const kept = new Set(is.map(key));
+    const entries = [];
+    const added = is.filter((route) => !known.has(key(route)));
+    if (added.length > 0) entries.push(["routesHeld", { routes: loggedRoutes(added.slice(0, LISTED)), count: added.length }]);
+    const roots = new Set(next.analysis?.roots ?? []);
+    const reasonOf = (route) => {
+      if (!next.enabled) return "proxyOff";
+      if (next.appliedPac === null) return "noUserPac";
+      if (!roots.has(route.mask)) return "rootGone";
+      return traffic.drained(route) ? "drained" : "routed";
+    };
+    const released = new Map();
+    for (const route of was.filter((route) => !kept.has(key(route)))) {
+      const reason = reasonOf(route);
+      if (!released.has(reason)) released.set(reason, []);
+      released.get(reason).push(route);
+    }
+    const at = now();
+    const still = { held: loggedRoutes(is.slice(0, LISTED)), heldCount: is.length };
+    for (const [reason, routes] of released) {
+      const listed = routes.slice(0, LISTED).map((route) => {
+        const [logged] = loggedRoutes([route]);
+        const since = reason === "drained" ? traffic.since(route) : null;
+        return since === null ? logged : { ...logged, after: at - since };
+      });
+      entries.push(["routesReleased", { reason, routes: listed, count: routes.length, ...still }]);
+    }
+    return entries;
+  };
+
   const check = async (state) => {
     if (configured(state)) {
       const control = await proxy.control(state.appliedPac);
@@ -84,9 +122,11 @@ export function createEngine({ store, proxy, dnr, session, traffic = NO_TRAFFIC,
     async commit(proposed) {
       const prev = store.state;
       const next = withHeld(proposed);
+      const changes = log.on && !sameHeld(prev.held, next.held) ? heldChanges(prev.held, next) : [];
       await store.commit(next);
       try {
         const control = await settle(next);
+        for (const [kind, fields] of changes) log.add(kind, fields);
         traffic.hold(releasable(next), now());
         return control;
       } catch (error) {

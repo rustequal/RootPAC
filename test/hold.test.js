@@ -7,6 +7,7 @@ import { createProxy } from "../src/background/proxy.js";
 import { Store, refresh } from "../src/background/store.js";
 import { createTraffic } from "../src/background/traffic.js";
 import { systemPacOf } from "../src/core/build.js";
+import { heldRoutes, loggedRoutes } from "../src/core/held.js";
 import { parsePublicSuffixList } from "../src/core/psl.js";
 import { FakeArea, FakeBrowser } from "./fakes.js";
 import { PSL, fixture, loadPac, vmChecker } from "./support.js";
@@ -23,7 +24,8 @@ async function setup() {
   let clock = 1000;
   let released = 0;
   const traffic = createTraffic({ onDrained: () => released++ });
-  const engine = createEngine({ store, proxy: createProxy(browser), dnr: createDnr(browser.dnr), session: new FakeArea(), traffic, now: () => clock });
+  const log = { on: true, entries: [], add(kind, fields = {}) { this.entries.push({ kind, ...fields }); } };
+  const engine = createEngine({ store, proxy: createProxy(browser), dnr: createDnr(browser.dnr), session: new FakeArea(), traffic, now: () => clock, log });
   const commands = createCommands({ store, engine, checker: vmChecker(), session: new FakeArea(), learner: { tabHost: () => null, newHosts: () => 0 } });
   assert.equal((await commands.dispatch({ type: "saveUserPac", text: fixture("user.pac") })).ok, true);
   await store.run((state) => {
@@ -39,7 +41,8 @@ async function setup() {
   };
   const route = (host) => loadPac(store.state.appliedPac).FindProxyForURL(`https://${host}/`, host);
   const release = () => store.run((state) => engine.commit(state));
-  return { store, engine, commands, browser, traffic, request, route, release, released: () => released, tick: (at) => (clock = at) };
+  const logged = () => log.entries.filter(({ kind }) => kind === "routesHeld" || kind === "routesReleased");
+  return { store, engine, commands, browser, traffic, request, route, release, log, logged, area, released: () => released, tick: (at) => (clock = at) };
 }
 
 test("a removed record stays in the PAC while a request to it is on its way, and leaves it once the request is done", async () => {
@@ -132,4 +135,62 @@ test("switching the proxy off drops the held routes; safe mode keeps them and ne
   again(1301);
   assert.deepEqual(store.state.held, held);
   assert.equal(released(), 0);
+});
+
+test("the log shows the routes held and, once the requests finish, the routes released with how long they were held", async () => {
+  const { commands, request, release, logged, tick } = await setup();
+  const finish = request("img.cdn.example.net", 900);
+  tick(1100);
+  await commands.dispatch({ type: "removeHost", mask: "instagram.com", host: "cdn.example.net" });
+  assert.deepEqual(logged(), [{ kind: "routesHeld", routes: [{ name: "cdn.example.net", root: "instagram.com" }], count: 1 }]);
+  finish(1150);
+  tick(2900);
+  await release();
+  assert.deepEqual(logged()[1], { kind: "routesReleased", reason: "drained", routes: [{ name: "cdn.example.net", root: "instagram.com", after: 1800 }], count: 1, held: [], heldCount: 0 });
+  await release();
+  assert.equal(logged().length, 2, "a commit that changes no held route logs nothing");
+});
+
+test("routes released without the traffic name why: routed again by the configuration, the proxy switched off", async () => {
+  const { store, engine, commands, request, logged, tick } = await setup();
+  request("cdn.example.net", 900);
+  tick(1100);
+  await commands.dispatch({ type: "removeHost", mask: "instagram.com", host: "cdn.example.net" });
+  await store.run((state) => {
+    const groups = { ...state.groups, "instagram.com": { ...state.groups["instagram.com"], hosts: { "cdn.example.net": 1 } } };
+    const next = { ...state, groups, sites: { ...state.sites, "example.net": "instagram.com" } };
+    return engine.commit({ ...next, appliedPac: systemPacOf(next, PSL) });
+  });
+  assert.deepEqual(logged()[1], { kind: "routesReleased", reason: "routed", routes: [{ name: "cdn.example.net", root: "instagram.com" }], count: 1, held: [], heldCount: 0 });
+  await commands.dispatch({ type: "removeHost", mask: "instagram.com", host: "cdn.example.net" });
+  await commands.dispatch({ type: "setEnabled", enabled: false });
+  assert.deepEqual(logged()[3], { kind: "routesReleased", reason: "proxyOff", routes: [{ name: "cdn.example.net", root: "instagram.com" }], count: 1, held: [], heldCount: 0 });
+});
+
+test("a start of the browser lets the held routes of the last session go and says so", async () => {
+  const { store, area } = await setup();
+  await store.run((state) => store.commit({ ...state, held: { "instagram.com": { "github.io": 2 } } }));
+  const restarted = new Store(area, new FakeArea());
+  await restarted.load(PSL);
+  assert.deepEqual(restarted.expiredHeld, { "instagram.com": { "github.io": 2 } });
+  assert.equal(restarted.state.held, null);
+  assert.deepEqual(loggedRoutes(heldRoutes(restarted.expiredHeld)), [{ name: "github.io", root: "instagram.com", exact: true }]);
+});
+
+test("a narrowing of many records lists twenty routes in the log and counts the rest", async () => {
+  const { store, engine, request, logged, tick } = await setup();
+  const hosts = Object.fromEntries(Array.from({ length: 30 }, (_, i) => [`h${i}.example.net`, 1]));
+  await store.run((state) => {
+    const next = { ...state, groups: { ...state.groups, "instagram.com": { ...state.groups["instagram.com"], hosts } } };
+    return engine.commit({ ...next, appliedPac: systemPacOf(next, PSL) });
+  });
+  request("h0.example.net", 900);
+  tick(1100);
+  await store.run((state) => {
+    const next = { ...state, groups: { ...state.groups, "instagram.com": { ...state.groups["instagram.com"], hosts: {} } } };
+    return engine.commit({ ...next, appliedPac: systemPacOf(next, PSL) });
+  });
+  const held = logged().findLast(({ kind }) => kind === "routesHeld");
+  assert.equal(held.count, 30);
+  assert.equal(held.routes.length, 20);
 });

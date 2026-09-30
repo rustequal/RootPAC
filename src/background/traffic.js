@@ -80,6 +80,12 @@ export function createTraffic({ onDrained = () => undefined } = {}) {
       return entry !== undefined && isDrained(entry);
     },
 
+    // The moment a route was held, for the log; unknown for a route an earlier worker held.
+    since(route) {
+      const entry = held.get(keyOf(route));
+      return entry === undefined || entry.adopted ? null : entry.since;
+    },
+
     // The routes held by the PAC in force, after every commit: a new one waits from `now`, a known one keeps its moment.
     hold(routes, now) {
       const next = new Map();

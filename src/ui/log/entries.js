@@ -6,7 +6,7 @@ export const CATEGORIES = {
   errors: new Set(["proxyFailure", "proxyError", "requestError", "incomplete", "learnError", "applyError", "startupError", "conflict", "proxyCheckError"]),
   learning: new Set(["blocked", "reported", "learned", "aggregated", "skipped", "proxiesChecked"]),
   pages: new Set(["navigation"]),
-  state: new Set(["protection", "command", "log", "lifecycle", "psl"]),
+  state: new Set(["protection", "command", "log", "lifecycle", "psl", "routesHeld", "routesReleased"]),
 };
 
 const LEVELS = {
@@ -96,6 +96,27 @@ function pslText({ trigger, outcome, version, installed, message }) {
   return `${by}: Public Suffix List update failed: ${message}`;
 }
 
+const RELEASED = {
+  drained: "the requests on their way finished, the System PAC is narrowed to the configuration",
+  routed: "the configuration routes them again",
+  rootGone: "the User PAC no longer declares their root",
+  proxyOff: "the proxy is switched off",
+  noUserPac: "there is no User PAC",
+  restart: "the browser or RootPAC restarted, no request is on its way",
+};
+
+const duration = (ms) => (ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(1)} s`);
+
+function routesText(routes = [], count = routes.length) {
+  const listed = routes.map(({ name, root, exact, after }) => `${name}${exact ? " (exact)" : ""} [${root}]${after === undefined ? "" : ` after ${duration(after)}`}`).join(", ");
+  return count > routes.length ? `${listed} and ${count - routes.length} more` : listed;
+}
+
+function releasedText({ reason, routes, count, held, heldCount }) {
+  const still = held?.length > 0 ? `; still held: ${routesText(held, heldCount)}` : "";
+  return `Routes released: ${routesText(routes, count)} — ${RELEASED[reason] ?? reason}${still}`;
+}
+
 function lifecycleText({ event, version, previousVersion }) {
   if (event === "startup") return `Browser started, RootPAC ${version}`;
   if (event === "install") return `RootPAC ${version} installed`;
@@ -146,6 +167,10 @@ export function entryText(entry) {
       return lifecycleText(entry);
     case "psl":
       return pslText(entry);
+    case "routesHeld":
+      return `Routes held for requests already on their way: ${routesText(entry.routes, entry.count)} — the blocking rules are narrowed, the System PAC keeps these routes until the requests finish`;
+    case "routesReleased":
+      return releasedText(entry);
     default:
       return entry.kind;
   }

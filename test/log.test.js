@@ -7,7 +7,7 @@ import { createLog, LOG_SETTING } from "../src/background/log.js";
 import { createCommands } from "../src/background/messages.js";
 import { createProxy } from "../src/background/proxy.js";
 import { Store } from "../src/background/store.js";
-import { entryLevel, entryText, failuresByHost } from "../src/ui/log/entries.js";
+import { CATEGORIES, entryLevel, entryText, failuresByHost } from "../src/ui/log/entries.js";
 import { formatTime } from "../src/ui/shared/rpc.js";
 import { FakeArea, FakeBrowser } from "./fakes.js";
 import { fixture, vmChecker, PSL } from "./support.js";
@@ -176,4 +176,16 @@ test("public suffix list checks read as what happened to the list", () => {
   assert.equal(entryText(entry({ trigger: "weekly", outcome: "conflict", version: "2026-09-28_07-12-00_UTC" })), "Weekly check: Public Suffix List 2026-09-28 07:12:00 UTC is not installed, the saved User PAC does not pass with it");
   assert.equal(entryLevel(entry({ outcome: "conflict" })), "warn");
   assert.equal(entryLevel(entry({ outcome: "updated" })), "info");
+});
+
+test("held routes read as what the System PAC keeps and why it lets them go", () => {
+  const held = { time: 1, kind: "routesHeld", routes: [{ name: "cdn.example.net", root: "instagram.com" }, { name: "github.io", root: "a.com", exact: true }] };
+  assert.equal(entryText(held), "Routes held for requests already on their way: cdn.example.net [instagram.com], github.io (exact) [a.com] — the blocking rules are narrowed, the System PAC keeps these routes until the requests finish");
+  const released = { time: 2, kind: "routesReleased", reason: "drained", routes: [{ name: "cdn.example.net", root: "instagram.com", after: 1830 }], held: [{ name: "github.io", root: "a.com", exact: true }] };
+  assert.equal(entryText(released), "Routes released: cdn.example.net [instagram.com] after 1.8 s — the requests on their way finished, the System PAC is narrowed to the configuration; still held: github.io (exact) [a.com]");
+  assert.equal(entryText({ ...released, reason: "restart", routes: [{ name: "x.net", root: "a.com" }], held: [] }), "Routes released: x.net [a.com] — the browser or RootPAC restarted, no request is on its way");
+  assert.equal(entryText({ ...released, routes: [{ name: "x.net", root: "a.com", after: 40 }], held: [] }), "Routes released: x.net [a.com] after 40 ms — the requests on their way finished, the System PAC is narrowed to the configuration");
+  assert.equal(entryText({ ...released, routes: [{ name: "x.net", root: "a.com", after: 40 }], count: 3, held: [{ name: "y.net", root: "a.com" }], heldCount: 25 }), "Routes released: x.net [a.com] after 40 ms and 2 more — the requests on their way finished, the System PAC is narrowed to the configuration; still held: y.net [a.com] and 24 more");
+  assert.equal(entryLevel(held), "info");
+  assert.ok(CATEGORIES.state.has("routesHeld") && CATEGORIES.state.has("routesReleased"));
 });

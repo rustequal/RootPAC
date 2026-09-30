@@ -1,4 +1,4 @@
-import { heldRoutes } from "../core/held.js";
+import { LISTED, heldRoutes, loggedRoutes } from "../core/held.js";
 import { createBadge, decodeIcon } from "./badge.js";
 import { createChecker } from "./check.js";
 import { createDnr } from "./dnr.js";
@@ -69,7 +69,13 @@ const ready = logSetting
   .catch(ignore)
   .then(() => psl.select())
   .then((list) => store.load(list))
-  .then(() => traffic.adopt(heldRoutes(store.state.held), Date.now()))
+  .then(() => {
+    if (log.on && store.expiredHeld !== null) {
+      const routes = heldRoutes(store.expiredHeld);
+      log.add("routesReleased", { reason: "restart", routes: loggedRoutes(routes.slice(0, LISTED)), count: routes.length, held: [], heldCount: 0 });
+    }
+    traffic.adopt(heldRoutes(store.state.held), Date.now());
+  })
   .then(() => learner.restore())
   .then(() => engine.check());
 

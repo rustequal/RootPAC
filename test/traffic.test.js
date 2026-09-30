@@ -83,3 +83,13 @@ test("a route held by an earlier worker waits for a request of its own to finish
   traffic.hold([PZ], 104);
   assert.equal(traffic.drained(PZ), true, "hold keeps what the adopted route has seen");
 });
+
+test("the moment a route was held is known for the log, not for a route an earlier worker held", () => {
+  const { traffic } = setup();
+  traffic.hold([PZ], 100);
+  traffic.hold([PZ], 200);
+  assert.equal(traffic.since(PZ), 100);
+  assert.equal(traffic.since(EXACT_PZ), null);
+  traffic.adopt([EXACT_PZ], 300);
+  assert.equal(traffic.since(EXACT_PZ), null);
+});

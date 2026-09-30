@@ -21,6 +21,14 @@ export function heldRoutes(held) {
   return Object.entries(held ?? {}).flatMap(([mask, names]) => Object.entries(names).map(([name, kind]) => ({ mask, name, kind })));
 }
 
+// Routes as the log shows them: the name and the root whose proxy they go through; an entry lists at most `LISTED`
+// of them and counts the rest, so a narrowing of thousands of records does not bloat the log.
+export const LISTED = 20;
+
+export function loggedRoutes(routes) {
+  return routes.map(({ mask, name, kind }) => (kind === EXACT ? { name, root: mask, exact: true } : { name, root: mask }));
+}
+
 export function heldOf(routes) {
   if (routes.length === 0) return null;
   const held = {};

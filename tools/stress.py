@@ -142,6 +142,53 @@ def churn(worker, port, options, stop, stats, served, timings):
     return [every(options.psl_every, stop, update_list), every(options.pac_every, stop, save_user_pac), every(options.remove_every, stop, remove_site)]
 
 
+# The log keeps its last 5000 entries and the stand writes thousands (learning, pages): it is read as it grows.
+READ_HELD_LOG = """after => new Promise((resolve, reject) => {
+  const open = indexedDB.open("rootpac-log", 1);
+  open.onerror = () => reject(open.error);
+  open.onsuccess = () => {
+    const all = open.result.transaction("entries", "readonly").objectStore("entries").getAll(IDBKeyRange.lowerBound(after, true));
+    all.onerror = () => reject(all.error);
+    all.onsuccess = () => resolve(all.result);
+  };
+})"""
+
+
+async def read_held_log(worker, events, seen):
+    for entry in await worker.evaluate(READ_HELD_LOG, seen["id"]):
+        seen["id"] = max(seen["id"], entry["id"])
+        if entry["kind"] in ("routesHeld", "routesReleased"):
+            events.append(entry)
+
+
+# The log shows every narrowing: each route held is released later, with how long it was held (4.11, 6.5).
+def held_log_report(events, stats):
+    failures = []
+    open_routes = set()
+    reasons = Counter()
+    after = []
+    for event in events:
+        names = {(route["root"], route["name"]) for route in event["routes"]}
+        if event["count"] > len(event["routes"]):
+            failures.append(f"the stand expects short lists, {event['count']} routes in one event")
+        if event["kind"] == "routesHeld":
+            open_routes |= names
+        else:
+            reasons[event["reason"]] += len(names)
+            open_routes -= names
+            after += [route["after"] for route in event["routes"] if "after" in route]
+    held = sum(1 for event in events if event["kind"] == "routesHeld")
+    print(f"log: {held} routesHeld, {len(events) - held} routesReleased, released {dict(reasons)}")
+    if after:
+        after.sort()
+        print(f"log: held for median {after[len(after) // 2]:.0f} ms, p90 {after[int(len(after) * 0.9)]:.0f} ms, longest {after[-1]:.0f} ms")
+    if held == 0 and (stats["site removed"] > 0 or stats["psl updated"] > 0):
+        failures.append("the log shows no held routes although the PAC narrowed")
+    if open_routes:
+        failures.append(f"routes held in the log and never released: {sorted(open_routes)[:10]}")
+    return failures
+
+
 async def run(options):
     # Playwright routes a service worker's fetch (the list download) only with this switch.
     os.environ["PW_EXPERIMENTAL_SERVICE_WORKER_NETWORK_EVENTS"] = "1"
@@ -172,6 +219,8 @@ async def run(options):
         await context.route(PSL_URL, serve_list)
         worker = await extension_worker(context)
         print("browser", await worker.evaluate("navigator.userAgent.match(/Chrome\\/[0-9]+/)[0]"))
+        if options.log:
+            await worker.evaluate("chrome.storage.local.set({ logEnabled: true })")
         saved = await control(worker).evaluate("text => rootpac({ type: 'saveUserPac', text })", user_pac(port, 0))
         if not saved["ok"] or not await wait_for_armed(worker):
             raise RuntimeError(f"saveUserPac: {saved}")
@@ -181,8 +230,11 @@ async def run(options):
         stop = asyncio.Event()
         churners = [asyncio.create_task(task) for task in churn(worker, port, options, stop, stats, served, timings)]
         started = time.monotonic()
+        events, seen = [], {"id": 0}
         while time.monotonic() - started < options.duration:
             await asyncio.sleep(5)
+            if options.log:
+                await read_held_log(worker, events, seen)
             with lock:
                 print(f"{int(time.monotonic() - started)} s: through the proxy {sum(through_proxy.values())}, direct {sum(direct.values())}, {dict(stats)}", flush=True)
         stop.set()
@@ -199,6 +251,11 @@ async def run(options):
             if held is None:
                 break
         await probe.close()
+        if options.log:
+            await asyncio.sleep(1.5)  # the log writes in batches every 500 ms
+            await read_held_log(worker, events, seen)
+        else:
+            events = None
         backup = await control(worker).evaluate("rootpac({ type: 'exportState' })")
         groups = backup["backup"]["groups"]
         installed = await control(worker).evaluate("rootpac({ type: 'getPsl' })")
@@ -223,6 +280,8 @@ async def run(options):
         failures.append(f"held routes did not drain after the traffic: {held}")
     if check.returncode != 0:
         failures.append("netlog: " + "; ".join(line.strip() for line in verdict if line.startswith("  "))[:2000])
+    if events is not None:
+        failures += held_log_report(events, stats)
     if (options.psl_every < options.duration and stats["psl updated"] == 0) or (options.pac_every < options.duration and stats["user PAC saved"] == 0) or records == 0:
         failures.append(f"the stand did not exercise the transitions: {dict(stats)}, records {records}")
     print("RESULT:", "PASS" if not failures else "FAIL")
@@ -243,6 +302,7 @@ def main():
     parser.add_argument("--pac-every", type=float, default=5.0, help="seconds between User PAC saves")
     parser.add_argument("--remove-every", type=float, default=9999, help=f"seconds between removals of the site {ZONE}, as Remove site in the viewer")
     parser.add_argument("--netlog")
+    parser.add_argument("--log", action="store_true", help="record the diagnostic log and check its held and released routes")
     sys.exit(0 if asyncio.run(run(parser.parse_args())) else 1)
 
 

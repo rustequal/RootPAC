@@ -127,6 +127,7 @@ export class Store {
   #state = null;
   #stale = [];
   #verified = false;
+  #expired = null;
   #tail = Promise.resolve();
 
   constructor(area, session) {
@@ -143,6 +144,11 @@ export class Store {
   get state() {
     if (this.#state === null) throw new Error("Store is not loaded");
     return this.#state;
+  }
+
+  // The routes an earlier session held that `load` let go: a start of the browser or of RootPAC has no request on its way.
+  get expiredHeld() {
+    return this.#expired;
   }
 
   // Replaces the list in use; the caller commits the state worked out with it (pslupdate.js).
@@ -172,6 +178,7 @@ export class Store {
     this.#state = decode(items);
     this.#stale = Object.keys(items).filter(retired);
     // A browser or extension start (an empty storage.session) has no request on its way: routes are held no longer.
+    this.#expired = verified === undefined ? this.#state.held : null;
     const current = verified === undefined ? { ...this.#state, held: null } : this.#state;
     if (!this.#verified || this.#stale.length > 0) await this.commit(refresh(current, psl));
     return this.#state;
