@@ -17,6 +17,8 @@ var __GROUPS = [
   LEARNED_instagram_com
 ];
 
+var __HELD = [];
+
 var __ROOTS = [
   "instagram.com"
 ];
@@ -226,20 +228,22 @@ function __entry(name) {
   return entry;
 }
 
+function __route(group) {
+  var url = null;
+  for (var host in group.hosts) {
+    var entry = __entry(host);
+    if (entry.kind !== 0 && !(entry.kind === 2 && group.hosts[host] === 1)) continue;
+    if (url === null) url = "https://" + group.rootHost + "/";
+    entry.kind = group.hosts[host];
+    entry.rootHost = group.rootHost;
+    entry.url = url;
+  }
+}
+
 (function () {
   for (var r = 0; r < __ROOTS.length; r++) __entry(__ROOTS[r]).root = true;
-  for (var g = 0; g < __GROUPS.length; g++) {
-    var group = __GROUPS[g];
-    var url = null;
-    for (var host in group.hosts) {
-      var entry = __entry(host);
-      if (entry.kind !== 0) continue;
-      if (url === null) url = "https://" + group.rootHost + "/";
-      entry.kind = group.hosts[host];
-      entry.rootHost = group.rootHost;
-      entry.url = url;
-    }
-  }
+  for (var g = 0; g < __GROUPS.length; g++) __route(__GROUPS[g]);
+  for (var h = 0; h < __HELD.length; h++) __route(__HELD[h]);
   for (var b = 0; b < __BYPASS_HOSTS.length; b++) __entry(__BYPASS_HOSTS[b]).bypassHost = true;
   for (var s = 0; s < __BYPASS_SUBDOMAINS.length; s++) __entry(__BYPASS_SUBDOMAINS[s]).bypassSubdomain = true;
 })();

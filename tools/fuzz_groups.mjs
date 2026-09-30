@@ -3,6 +3,7 @@ import vm from "node:vm";
 import { analyzeUserPac } from "../src/core/analyze.js";
 import { exportBackup, readBackup } from "../src/core/backup.js";
 import { buildSystemPac } from "../src/core/build.js";
+import { droppedRoutes, heldOf, pacRoutes, routeCovers } from "../src/core/held.js";
 import { firstMatch } from "../src/core/glob.js";
 import { adoptLegacyGroups, aggregateGroups, hostIndex, mergeGroups, pruneSeen, reconcileGroups } from "../src/core/groups.js";
 import { covers, hostFromUrl, isHostName, isLearnable, learnedOwner, maskDomain, rootOf } from "../src/core/hosts.js";
@@ -193,6 +194,23 @@ function transition(tag, prev, next) {
       for (const context of contexts) {
         if (route(context, host) === "DIRECT" && firstMatch(host, policy.bypass) === null) flag("LEAK: a transition allows what a PAC sends DIRECT", { tag, host, top });
       }
+    }
+  }
+  // A request the rules of the previous state let through may reach the stream only under the next PAC (4.11): that PAC,
+  // with the routes it holds, must still send it to a proxy. A root the next User PAC no longer declares takes its pages
+  // and its routes with it.
+  const userPac = userPacText(next.analysis);
+  const routing = ({ analysis, state }) => ({ userPac, analysis, groups: state.groups, sites: state.sites });
+  const before = pacRoutes(routing(prev), PSL);
+  const held = heldOf(droppedRoutes(before, routing(next), PSL));
+  const following = loadPac(buildSystemPac(userPac, next.state.groups, PSL, next.state.sites, held));
+  const passed = buildRules(policyFor(prev));
+  const staying = prev.analysis.roots.filter((mask) => next.analysis.roots.includes(mask));
+  for (const host of probes) {
+    if (firstMatch(host, prev.analysis.bypass) !== null) continue;
+    if (!before.some((known) => staying.includes(known.mask) && routeCovers(known, host))) continue;
+    for (const top of staying.map(maskDomain)) {
+      if (allowedInRootContext(passed, host, top) && route(following, host) === "DIRECT") flag("LEAK: a request on its way loses its proxy", { tag, host, top });
     }
   }
 }

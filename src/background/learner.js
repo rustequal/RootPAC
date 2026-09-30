@@ -1,4 +1,4 @@
-import { buildSystemPac } from "../core/build.js";
+import { systemPacOf } from "../core/build.js";
 import { aggregateGroups, aggregatedRecords, hostIndex, mergeGroups, mergeSeen } from "../core/groups.js";
 import { firstMatch } from "../core/glob.js";
 import { hostFromUrl, isLearnable, isLearnableName, learnedOwner, rootOf, underDeny } from "../core/hosts.js";
@@ -352,7 +352,8 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
     const sites = claimSites(sitesOf(state), accepted.map((source) => [source.host, source.mask]), state.analysis.roots, store.psl);
     const merged = mergeGroups(state.groups, batch, time);
     const { groups, seen: aggregatedSeen } = aggregateGroups(merged, nextSeen, state.analysis, store.psl);
-    const next = { ...state, groups, sites, seen: aggregatedSeen, appliedPac: buildSystemPac(state.userPac, groups, store.psl, sites) };
+    const learned = { ...state, groups, sites, seen: aggregatedSeen };
+    const next = { ...learned, appliedPac: systemPacOf(learned, store.psl) };
     await engine.commit(next);
     if (log.on) {
       for (const { host, mask, rootHost, tabId } of accepted) log.add("learned", { host, root: mask, rootHost, tabId });

@@ -39,7 +39,7 @@ test("first load writes the schema and defaults", async () => {
   const area = new FakeArea();
   const store = new Store(area, new FakeArea());
   const state = await store.load(PSL);
-  assert.deepEqual(state, { enabled: true, userPac: null, analysis: null, appliedPac: null, userPacErrors: null, proxies: null, sites: null, groups: {}, seen: {} });
+  assert.deepEqual(state, { enabled: true, userPac: null, analysis: null, appliedPac: null, userPacErrors: null, proxies: null, sites: null, held: null, groups: {}, seen: {} });
   assert.deepEqual(area.items, { schemaVersion: SCHEMA_VERSION, enabled: true });
 });
 
@@ -137,6 +137,7 @@ test("a stored User PAC that no longer validates keeps the last applied configur
     userPacErrors: errors,
     proxies: null,
     sites: SITES,
+    held: null,
     groups: { "a.com": GROUP },
     seen: { "a.com": { "cdn.a.net": 5 } },
   });
@@ -290,4 +291,18 @@ test("malformed stored values fail fast", async () => {
   for (const extra of cases) {
     await assert.rejects(new Store(new FakeArea(stored(extra)), new FakeArea()).load(PSL), /malformed|not a string/, JSON.stringify(extra));
   }
+});
+
+test("held routes are kept by an interrupted commit in the same session and dropped by a new session", async () => {
+  const held = { "a.com": { "old.a.net": 1 } };
+  const same = new FakeArea(stored({ held }));
+  const kept = await new Store(same, new FakeArea({ stateVerified: false })).load(PSL);
+  assert.deepEqual(kept.held, held);
+  assert.match(kept.appliedPac, /HELD_a_com/);
+  const fresh = new FakeArea(stored({ held }));
+  const dropped = await new Store(fresh, new FakeArea()).load(PSL);
+  assert.equal(dropped.held, null);
+  assert.equal(Object.hasOwn(fresh.items, "held"), false);
+  assert.doesNotMatch(dropped.appliedPac, /HELD_a_com/);
+  await assert.rejects(new Store(new FakeArea(stored({ held: { "a.com": { "x.net": 3 } } })), new FakeArea()).load(PSL), /held routes are malformed/);
 });

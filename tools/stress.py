@@ -189,6 +189,16 @@ async def run(options):
         await asyncio.gather(*churners)
         for tab_page in pages:
             await tab_page.close()
+        # With the traffic over, the held routes drain: one more request moves the event stream past them (4.11).
+        held = None
+        probe = await context.new_page()
+        for _ in range(40):
+            await probe.goto("http://root.test:8080/stress?tab=9&g=0", wait_until="commit")
+            await asyncio.sleep(0.5)
+            held = (await worker.evaluate("chrome.storage.local.get('held')")).get("held")
+            if held is None:
+                break
+        await probe.close()
         backup = await control(worker).evaluate("rootpac({ type: 'exportState' })")
         groups = backup["backup"]["groups"]
         installed = await control(worker).evaluate("rootpac({ type: 'getPsl' })")
@@ -206,8 +216,11 @@ async def run(options):
     print("netlog:", verdict[-1] if verdict else check.stderr.strip())
     print(f"netlog file {netlog}")
     failures = []
+    print(f"held routes after the traffic: {held}")
     if direct:
         failures.append(f"direct connections to origins: {dict(direct)}")
+    if held is not None:
+        failures.append(f"held routes did not drain after the traffic: {held}")
     if check.returncode != 0:
         failures.append("netlog: " + "; ".join(line.strip() for line in verdict if line.startswith("  "))[:2000])
     if (options.psl_every < options.duration and stats["psl updated"] == 0) or (options.pac_every < options.duration and stats["user PAC saved"] == 0) or records == 0:

@@ -1,6 +1,6 @@
 import { analyzeUserPac } from "../core/analyze.js";
 import { exportBackup, readBackup } from "../core/backup.js";
-import { buildSystemPac } from "../core/build.js";
+import { buildSystemPac, systemPacOf } from "../core/build.js";
 import { maskDomain, rootOf } from "../core/hosts.js";
 import { adoptLegacyGroups, aggregateGroups, pruneSeen, reconcileGroups } from "../core/groups.js";
 import { answersOf, bootstrapSites, normalizeSites, proxiesOf, releaseSites, routeSites, sharedRoutes, siteIn, siteOf, sitesOfState } from "../core/routes.js";
@@ -34,13 +34,10 @@ export function createCommands({ store, engine, checker, learner, psl = null, lo
   };
 
   // Groups changed by a command: the owners of sites nobody holds any more are dropped.
-  const rebuild = (state, groups, seen, sites = normalizeSites(state.sites, groups, state.analysis.roots, store.psl)) => ({
-    ...state,
-    groups,
-    seen,
-    sites,
-    appliedPac: buildSystemPac(state.userPac, groups, store.psl, sites),
-  });
+  const rebuild = (state, groups, seen, sites = normalizeSites(state.sites, groups, state.analysis.roots, store.psl)) => {
+    const next = { ...state, groups, seen, sites };
+    return { ...next, appliedPac: systemPacOf(next, store.psl) };
+  };
 
   const trial = async (userPac, analysis, { groups, sites }) => {
     const systemPac = buildSystemPac(userPac, groups, store.psl, sites);

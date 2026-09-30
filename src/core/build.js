@@ -2,7 +2,7 @@ import { analyzeUserPac, isValidRoot, parseScript } from "./analyze.js";
 import { firstMatch } from "./glob.js";
 import { covers, isLearnableName, maskDomain, rootOf } from "./hosts.js";
 import { USER_OPEN, userPacLine } from "./pacline.js";
-import { bootstrapSites, routedGroups } from "./routes.js";
+import { bootstrapSites, rootHostOf, routedGroups } from "./routes.js";
 
 export { userPacLine };
 
@@ -211,20 +211,22 @@ const ROUTER = [
   "  return entry;",
   "}",
   "",
+  "function __route(group) {",
+  "  var url = null;",
+  "  for (var host in group.hosts) {",
+  "    var entry = __entry(host);",
+  "    if (entry.kind !== 0 && !(entry.kind === 2 && group.hosts[host] === 1)) continue;",
+  '    if (url === null) url = "https://" + group.rootHost + "/";',
+  "    entry.kind = group.hosts[host];",
+  "    entry.rootHost = group.rootHost;",
+  "    entry.url = url;",
+  "  }",
+  "}",
+  "",
   "(function () {",
   "  for (var r = 0; r < __ROOTS.length; r++) __entry(__ROOTS[r]).root = true;",
-  "  for (var g = 0; g < __GROUPS.length; g++) {",
-  "    var group = __GROUPS[g];",
-  "    var url = null;",
-  "    for (var host in group.hosts) {",
-  "      var entry = __entry(host);",
-  "      if (entry.kind !== 0) continue;",
-  '      if (url === null) url = "https://" + group.rootHost + "/";',
-  "      entry.kind = group.hosts[host];",
-  "      entry.rootHost = group.rootHost;",
-  "      entry.url = url;",
-  "    }",
-  "  }",
+  "  for (var g = 0; g < __GROUPS.length; g++) __route(__GROUPS[g]);",
+  "  for (var h = 0; h < __HELD.length; h++) __route(__HELD[h]);",
   "  for (var b = 0; b < __BYPASS_HOSTS.length; b++) __entry(__BYPASS_HOSTS[b]).bypassHost = true;",
   "  for (var s = 0; s < __BYPASS_SUBDOMAINS.length; s++) __entry(__BYPASS_SUBDOMAINS[s]).bypassSubdomain = true;",
   "})();",
@@ -269,11 +271,11 @@ function isPlainObject(value) {
   return typeof value === "object" && value !== null && Object.getPrototypeOf(value) === Object.prototype;
 }
 
-function assignNames(masks) {
+function assignNames(masks, prefix = "LEARNED_") {
   const used = new Set();
   const names = new Map();
   for (const mask of masks) {
-    const base = `LEARNED_${mask.replace(/[^A-Za-z0-9]/g, "_")}`;
+    const base = `${prefix}${mask.replace(/[^A-Za-z0-9]/g, "_")}`;
     let name = base;
     for (let k = 2; used.has(name); k++) name = `${base}_${k}`;
     used.add(name);
@@ -337,11 +339,12 @@ function checkSites(sites, roots) {
   }
 }
 
-function renderGroup(mask, name, { rootHost, hosts }, psl) {
+// `kindOf` gives each host its route: 1 covers subdomains, 2 is exact (rule 9).
+function renderGroup(mask, name, { rootHost, hosts }, kindOf) {
   const keys = Object.keys(hosts).sort();
   const body = [
     "  hosts: {",
-    ["    __proto__: null", ...keys.map((host) => `    ${JSON.stringify(host)}: ${psl.isPublicSuffix(host) ? 2 : 1}`)].join(",\n"),
+    ["    __proto__: null", ...keys.map((host) => `    ${JSON.stringify(host)}: ${kindOf(host)}`)].join(",\n"),
     "  }",
   ];
   return [
@@ -360,8 +363,24 @@ function renderArray(name, items) {
   return [`var ${name} = [`, items.map((item) => `  ${item}`).join(",\n"), "];", ""];
 }
 
-// `sites` names the owner of each site (core/routes.js); without it, owners are derived from the groups.
-export function buildSystemPac(userPac, groups, psl, sites) {
+function checkHeld(held, roots) {
+  if (held === null) return [];
+  if (!isPlainObject(held)) throw new TypeError("Held routes must be a plain object");
+  for (const [mask, names] of Object.entries(held)) {
+    if (!isPlainObject(names)) throw new TypeError(`Held routes of ${JSON.stringify(mask)} must be an object`);
+    for (const [name, kind] of Object.entries(names)) {
+      if (!isLearnableName(name)) throw new Error(`Held route ${JSON.stringify(name)} is not a host name`);
+      if (kind !== 1 && kind !== 2) throw new Error(`Held route ${JSON.stringify(name)} has an invalid kind`);
+    }
+  }
+  // A root the User PAC no longer declares takes its held routes with it (4.11).
+  return Object.keys(held).filter((mask) => roots.includes(mask)).sort();
+}
+
+// `sites` names the owner of each site (core/routes.js); without it, owners are derived from the groups. `held` are the
+// routes a newer configuration dropped while requests may still be on their way to them (4.11): they come after every
+// learned record and keep their own kind.
+export function buildSystemPac(userPac, groups, psl, sites, held = null) {
   if (typeof psl?.isPublicSuffix !== "function") throw new TypeError("System PAC needs the public suffix list");
   const analysis = checkUserPac(userPac, psl);
   checkGroups(groups, analysis);
@@ -369,6 +388,8 @@ export function buildSystemPac(userPac, groups, psl, sites) {
   checkSites(owners, analysis.roots);
   const masks = Object.keys(groups).sort();
   const names = assignNames(masks);
+  const heldMasks = checkHeld(held, analysis.roots);
+  const heldNames = assignNames(heldMasks, "HELD_");
   // Every learned host goes through the owner of its site, so each group carries the hosts of the sites it owns.
   const { routed, pacRoots } = routedGroups(groups, owners, analysis.roots, psl);
   const rendered = (mask) => (Object.keys(routed[mask].hosts).length === 0 ? { rootHost: groups[mask].rootHost, hosts: {} } : routed[mask]);
@@ -376,8 +397,10 @@ export function buildSystemPac(userPac, groups, psl, sites) {
   const literals = (items) => items.map((item) => JSON.stringify(item));
   const text = [
     ...HEADER,
-    ...masks.flatMap((mask) => renderGroup(mask, names.get(mask), rendered(mask), psl)),
+    ...masks.flatMap((mask) => renderGroup(mask, names.get(mask), rendered(mask), (host) => (psl.isPublicSuffix(host) ? 2 : 1))),
     ...renderArray("__GROUPS", masks.map((mask) => names.get(mask))),
+    ...heldMasks.flatMap((mask) => renderGroup(mask, heldNames.get(mask), { rootHost: rootHostOf(mask, groups), hosts: held[mask] }, (host) => held[mask][host])),
+    ...renderArray("__HELD", heldMasks.map((mask) => heldNames.get(mask))),
     ...renderArray("__ROOTS", literals(masks.filter((mask) => pacRoots.includes(mask)))),
     ...renderArray("__BYPASS_HOSTS", literals(bypass.filter((mask) => !mask.startsWith("*.")))),
     ...renderArray("__BYPASS_SUBDOMAINS", literals(bypass.filter((mask) => mask.startsWith("*.")).map(maskDomain))),
@@ -394,4 +417,9 @@ export function buildSystemPac(userPac, groups, psl, sites) {
     throw new Error("Generated system PAC does not parse", { cause: error });
   }
   return text;
+}
+
+// The System PAC of a routing state: its User PAC, groups, site owners and held routes.
+export function systemPacOf({ userPac, groups, sites, held = null }, psl) {
+  return buildSystemPac(userPac, groups, psl, sites ?? undefined, held);
 }

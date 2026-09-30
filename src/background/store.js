@@ -1,5 +1,5 @@
 import { analyzeUserPac } from "../core/analyze.js";
-import { buildSystemPac } from "../core/build.js";
+import { systemPacOf } from "../core/build.js";
 import { adoptLegacyGroups, aggregateGroups, pruneSeen, reconcileGroups } from "../core/groups.js";
 import { bootstrapSites, normalizeSites, releaseSites } from "../core/routes.js";
 import { LOG_SETTING } from "./log.js";
@@ -9,7 +9,7 @@ export const SCHEMA_VERSION = 1;
 const GROUP = "group:";
 const SEEN = "seen:";
 const VERIFIED = "stateVerified";
-const SCALARS = ["enabled", "userPac", "analysis", "appliedPac", "userPacErrors", "proxies", "sites"];
+const SCALARS = ["enabled", "userPac", "analysis", "appliedPac", "userPacErrors", "proxies", "sites", "held"];
 // The public suffix list (pslupdate.js): the downloaded list, the weekly switch, the time of the last weekly check and a
 // newer list the saved User PAC does not pass with.
 export const PSL_KEYS = Object.freeze({ list: "pslList", auto: "pslAutoUpdate", checked: "pslChecked", conflict: "pslConflict" });
@@ -20,7 +20,7 @@ const SETTINGS = new Set([LOG_SETTING, ...Object.values(PSL_KEYS)]);
 const retired = (key) => key.startsWith("uses:");
 
 function decode(items) {
-  const state = { enabled: true, userPac: null, analysis: null, appliedPac: null, userPacErrors: null, proxies: null, sites: null, groups: {}, seen: {} };
+  const state = { enabled: true, userPac: null, analysis: null, appliedPac: null, userPacErrors: null, proxies: null, sites: null, held: null, groups: {}, seen: {} };
   for (const [key, value] of Object.entries(items)) {
     if (key === "schemaVersion" || SETTINGS.has(key) || retired(key)) continue;
     if (SCALARS.includes(key)) state[key] = value;
@@ -41,6 +41,7 @@ function decode(items) {
   if (state.analysis !== null && !isAnalysis(state.analysis)) throw new Error("Stored analysis is malformed");
   if (!isProxies(state.proxies)) throw new Error("Stored proxies are malformed");
   if (!(state.sites === null || (isRecord(state.sites) && Object.values(state.sites).every((mask) => typeof mask === "string")))) throw new Error("Stored sites are malformed");
+  if (!isHeld(state.held)) throw new Error("Stored held routes are malformed");
   for (const [mask, group] of Object.entries(state.groups)) {
     const valid = isRecord(group) && (group.rootHost === null || typeof group.rootHost === "string") && isRecord(group.hosts) && Object.values(group.hosts).every(isTime);
     if (!valid) throw new Error(`Stored group ${JSON.stringify(mask)} is malformed`);
@@ -65,6 +66,11 @@ function isProxies(proxies) {
   return proxies === null || (isRecord(proxies) && Object.values(proxies).every((item) => isRecord(item) && typeof item.host === "string" && typeof item.answer === "string"));
 }
 
+// Held routes (4.11): { [mask]: { [name]: 1 | 2 } }.
+function isHeld(held) {
+  return held === null || (isRecord(held) && Object.values(held).every((names) => isRecord(names) && Object.values(names).every((kind) => kind === 1 || kind === 2)));
+}
+
 function isAnalysis(analysis) {
   const masks = (list) => Array.isArray(list) && list.every((mask) => typeof mask === "string");
   return isRecord(analysis) && masks(analysis.roots) && masks(analysis.deny) && (analysis.bypass === undefined || masks(analysis.bypass));
@@ -73,7 +79,7 @@ function isAnalysis(analysis) {
 
 // The routing state worked out again from the saved User PAC, with the public suffix list given.
 export function refresh(state, psl) {
-  if (state.userPac === null) return { ...state, groups: {}, seen: {}, sites: null };
+  if (state.userPac === null) return { ...state, groups: {}, seen: {}, sites: null, held: null };
   const result = analyzeUserPac(state.userPac, psl);
   if (!result.ok) {
     const same = JSON.stringify(result.errors) === JSON.stringify(state.userPacErrors);
@@ -88,7 +94,8 @@ export function refresh(state, psl) {
   const reconciled = reconcileGroups(adopted.groups, analysis);
   const { groups, seen } = aggregateGroups(reconciled, pruneSeen(adopted.seen, reconciled), analysis, psl);
   const sites = normalizeSites(releaseSites(owners, groups, analysis.roots, psl), groups, analysis.roots, psl, state.analysis?.roots ?? analysis.roots);
-  return { ...state, analysis, groups, seen, sites, appliedPac: buildSystemPac(state.userPac, groups, psl, sites), userPacErrors: null };
+  const next = { ...state, analysis, groups, seen, sites, userPacErrors: null };
+  return { ...next, appliedPac: systemPacOf(next, psl) };
 }
 
 function diffRecords(prefix, prev, next, set, remove) {
@@ -164,7 +171,9 @@ export class Store {
     }
     this.#state = decode(items);
     this.#stale = Object.keys(items).filter(retired);
-    if (!this.#verified || this.#stale.length > 0) await this.commit(refresh(this.#state, psl));
+    // A browser or extension start (an empty storage.session) has no request on its way: routes are held no longer.
+    const current = verified === undefined ? { ...this.#state, held: null } : this.#state;
+    if (!this.#verified || this.#stale.length > 0) await this.commit(refresh(current, psl));
     return this.#state;
   }
 

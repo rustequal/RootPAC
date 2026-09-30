@@ -1,3 +1,4 @@
+import { heldRoutes } from "../core/held.js";
 import { createBadge, decodeIcon } from "./badge.js";
 import { createChecker } from "./check.js";
 import { createDnr } from "./dnr.js";
@@ -10,6 +11,7 @@ import { createProxy } from "./proxy.js";
 import { PSL_ALARM, createPslUpdater } from "./pslupdate.js";
 import { createResolver } from "./resolve.js";
 import { PSL_KEYS, Store } from "./store.js";
+import { createTraffic } from "./traffic.js";
 
 const ignore = () => undefined;
 
@@ -25,11 +27,14 @@ chrome.storage.onChanged.addListener((changes, area) => {
 });
 
 const store = new Store(chrome.storage.local, chrome.storage.session);
+// A held route whose requests have drained leaves the PAC with the next commit of the state as it is (4.11).
+const traffic = createTraffic({ onDrained: () => release() });
 const engine = createEngine({
   store,
   proxy: createProxy({ proxy: chrome.proxy, privacy: chrome.privacy, extension: chrome.extension }),
   dnr: createDnr(chrome.declarativeNetRequest),
   session: chrome.storage.session,
+  traffic,
   log,
 });
 const psl = createPslUpdater({
@@ -64,6 +69,7 @@ const ready = logSetting
   .catch(ignore)
   .then(() => psl.select())
   .then((list) => store.load(list))
+  .then(() => traffic.adopt(heldRoutes(store.state.held), Date.now()))
   .then(() => learner.restore())
   .then(() => engine.check());
 
@@ -101,18 +107,29 @@ chrome.runtime.onStartup.addListener(() => {
   }, ignore);
 });
 
+const release = whenReady(() => store.run((state) => engine.commit(state)));
+
+// Requests are counted as their events arrive, before `ready`: a request on its way is one whatever the state.
 const NETWORK = { urls: ["http://*/*", "https://*/*", "ws://*/*", "wss://*/*"] };
-chrome.webRequest.onBeforeRequest.addListener(whenReady(learner.onRequest), NETWORK);
+const counted = (handler, count) => (details) => {
+  count(details);
+  handler(details);
+};
+chrome.webRequest.onBeforeRequest.addListener(counted(whenReady(learner.onRequest), traffic.start), NETWORK);
 chrome.webRequest.onHeadersReceived.addListener(
-  whenReady((details) => {
-    learner.onResponse(details);
-    learner.onHeaders(details);
-  }),
+  counted(
+    whenReady((details) => {
+      learner.onResponse(details);
+      learner.onHeaders(details);
+    }),
+    traffic.end,
+  ),
   NETWORK,
   ["responseHeaders"],
 );
-chrome.webRequest.onCompleted.addListener(whenReady(learner.onResponse), NETWORK);
-chrome.webRequest.onErrorOccurred.addListener(whenReady(learner.onError), NETWORK);
+chrome.webRequest.onBeforeRedirect.addListener(traffic.end, NETWORK);
+chrome.webRequest.onCompleted.addListener(counted(whenReady(learner.onResponse), traffic.end), NETWORK);
+chrome.webRequest.onErrorOccurred.addListener(counted(whenReady(learner.onError), traffic.end), NETWORK);
 chrome.webNavigation.onCommitted.addListener(
   whenReady(async (details) => {
     learner.onCommitted(details);
