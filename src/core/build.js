@@ -1,6 +1,6 @@
 import { analyzeUserPac, isValidRoot, parseScript } from "./analyze.js";
 import { firstMatch } from "./glob.js";
-import { covers, isLearnableName, maskDomain, rootOf } from "./hosts.js";
+import { covers, isLearnableName, maskDomain } from "./hosts.js";
 import { USER_OPEN, userPacLine } from "./pacline.js";
 import { bootstrapSites, rootHostOf, routedGroups } from "./routes.js";
 
@@ -294,12 +294,14 @@ function checkUserPac(userPac, psl) {
   return analysis;
 }
 
+// The roots of a valid User PAC never overlap, so a host lies under its own root exactly when that root covers it.
 function checkGroups(groups, { roots, deny, bypass }) {
   if (!isPlainObject(groups)) throw new TypeError("Groups must be a plain object");
   const masks = Object.keys(groups);
+  const declared = new Set(roots);
   for (const mask of masks) {
     if (!isValidRoot(mask)) throw new Error(`Invalid group mask ${JSON.stringify(mask)}`);
-    if (!roots.includes(mask)) throw new Error(`Group ${JSON.stringify(mask)} has no root() in the User PAC`);
+    if (!declared.has(mask)) throw new Error(`Group ${JSON.stringify(mask)} has no root() in the User PAC`);
   }
   for (const mask of roots) {
     if (!Object.hasOwn(groups, mask)) throw new Error(`Root ${JSON.stringify(mask)} has no group`);
@@ -321,7 +323,7 @@ function checkGroups(groups, { roots, deny, bypass }) {
       const name = JSON.stringify(host);
       if (rootHost === null) throw new Error(`Group ${label} has hosts but no rootHost`);
       if (!isLearnableName(host)) throw new Error(`Host ${name} cannot be learned`);
-      if (rootOf(host, roots) === mask) throw new Error(`Host ${name} matches its own root ${JSON.stringify(mask)}`);
+      if (covers(mask, host)) throw new Error(`Host ${name} matches its own root ${JSON.stringify(mask)}`);
       const denyMask = deny.find((mask) => covers(maskDomain(mask), host));
       if (denyMask !== undefined) throw new Error(`Host ${name} is under deny ${JSON.stringify(denyMask)}`);
       const bypassMask = firstMatch(host, bypass);
@@ -334,8 +336,9 @@ function checkGroups(groups, { roots, deny, bypass }) {
 
 function checkSites(sites, roots) {
   if (!isPlainObject(sites)) throw new TypeError("Sites must be a plain object");
+  const declared = new Set(roots);
   for (const [site, mask] of Object.entries(sites)) {
-    if (!roots.includes(mask)) throw new Error(`Site ${JSON.stringify(site)} belongs to ${JSON.stringify(mask)}, which has no root() in the User PAC`);
+    if (!declared.has(mask)) throw new Error(`Site ${JSON.stringify(site)} belongs to ${JSON.stringify(mask)}, which has no root() in the User PAC`);
   }
 }
 
@@ -412,7 +415,7 @@ export function buildSystemPac(userPac, groups, psl, sites, held = null) {
     "",
   ].join("\n");
   try {
-    parseScript(text);
+    parseScript(text, { locations: false });
   } catch (error) {
     throw new Error("Generated system PAC does not parse", { cause: error });
   }

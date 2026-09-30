@@ -1,10 +1,30 @@
 const NON_ASCII = /[^\x00-\x7f]/;
+// Every build of the System PAC, the rules and the PAC routes asks about every learned host again; the answers of one
+// list are kept, and forgotten all at once when there are too many.
+const MAX_ANSWERS = 65_536;
 
 function toAscii(name) {
   if (!NON_ASCII.test(name)) return name;
   const host = new URL(`http://${name}/`).hostname;
   if (host === "") throw new Error(`Public suffix rule ${JSON.stringify(name)} has no ASCII form`);
   return host;
+}
+
+function isName(name) {
+  return typeof name === "string" && name !== "" && name[0] !== "." && name[name.length - 1] !== "." && !name.includes("..");
+}
+
+function remembered(find) {
+  const answers = new Map();
+  return (name) => {
+    let answer = answers.get(name);
+    if (answer === undefined) {
+      if (answers.size >= MAX_ANSWERS) answers.clear();
+      answer = find(name);
+      answers.set(name, answer);
+    }
+    return answer;
+  };
 }
 
 export function parsePublicSuffixList(text) {
@@ -21,33 +41,36 @@ export function parsePublicSuffixList(text) {
   }
   if (rules.size === 0) throw new Error("Public suffix list has no rules");
 
-  const publicSuffixLength = (labels) => {
-    for (let start = 0; start < labels.length; start++) {
-      const name = labels.slice(start).join(".");
-      if (exceptions.has(name)) return labels.length - start - 1;
-      const parent = labels.slice(start + 1).join(".");
-      if (rules.has(name) || (start + 1 < labels.length && wildcards.has(parent))) return labels.length - start;
+  // The labels of the public suffix of a name, by the rules of publicsuffix.org: an exception wins, then the longest
+  // rule or wildcard, and `*` when nothing matches. The suffixes are walked from the longest, one label at a time.
+  const suffixLabels = (name) => {
+    let labels = 1;
+    for (let i = 0; i < name.length; i++) if (name[i] === ".") labels++;
+    for (let start = 0; ; labels--) {
+      const suffix = start === 0 ? name : name.slice(start);
+      if (exceptions.has(suffix)) return labels - 1;
+      const dot = name.indexOf(".", start);
+      if (rules.has(suffix) || (dot >= 0 && wildcards.has(name.slice(dot + 1)))) return labels;
+      if (dot < 0) return 1;
+      start = dot + 1;
     }
-    return 1;
   };
 
-  const labelsOf = (name) => {
-    if (typeof name !== "string" || name === "") return null;
-    const labels = name.split(".");
-    return labels.some((label) => label === "") ? null : labels;
+  // The last `count` labels of a name, or null when it has fewer.
+  const lastLabels = (name, count) => {
+    let end = name.length;
+    for (let seen = 0; seen < count; seen++) {
+      end = name.lastIndexOf(".", end - 1);
+      if (end < 0) return seen === count - 1 ? name : null;
+    }
+    return name.slice(end + 1);
   };
+
+  const isPublicSuffix = remembered((name) => lastLabels(name, suffixLabels(name) + 1) === null);
+  const registrableDomain = remembered((host) => lastLabels(host, suffixLabels(host) + 1));
 
   return {
-    isPublicSuffix(name) {
-      const labels = labelsOf(name);
-      return labels !== null && publicSuffixLength(labels) >= labels.length;
-    },
-
-    registrableDomain(host) {
-      const labels = labelsOf(host);
-      if (labels === null) return null;
-      const length = publicSuffixLength(labels);
-      return labels.length > length ? labels.slice(-(length + 1)).join(".") : null;
-    },
+    isPublicSuffix: (name) => isName(name) && isPublicSuffix(name),
+    registrableDomain: (host) => (isName(host) ? registrableDomain(host) : null),
   };
 }

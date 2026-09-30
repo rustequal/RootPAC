@@ -55,10 +55,11 @@ export function routeCovers({ name, kind }, host) {
 // The routes of the PAC in force that the next state no longer sends to a proxy. A name the next PAC still sends to
 // some root's proxy, by a root, a covering record above it or the same record, is not dropped: its route may change
 // proxy, never to the User PAC. The routes of a root the next User PAC no longer declares go with the root.
-export function droppedRoutes(routes, next, psl) {
+// `nextRoutes` are the next state's own routes, without held ones, when the caller has them already.
+export function droppedRoutes(routes, next, psl, nextRoutes = pacRoutes({ ...next, held: null }, psl)) {
   const roots = new Set(next.analysis?.roots ?? []);
   const widest = new Map();
-  for (const { name, kind } of pacRoutes({ ...next, held: null }, psl)) widest.set(name, Math.min(widest.get(name) ?? EXACT, kind));
+  for (const { name, kind } of nextRoutes) widest.set(name, Math.min(widest.get(name) ?? EXACT, kind));
   const kept = ({ name, kind }) => {
     const own = widest.get(name);
     if (own === COVERING || (own === EXACT && kind === EXACT)) return true;

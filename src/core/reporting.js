@@ -63,9 +63,8 @@ function dictionaryStrings(value) {
 }
 
 function endpointHost(url, base) {
-  if (!URL.canParse(url, base)) return null;
-  const resolved = new URL(url, base);
-  return resolved.protocol === "https:" ? hostFromUrl(resolved.href) : null;
+  const resolved = URL.parse(url, base);
+  return resolved?.protocol === "https:" ? hostFromUrl(resolved.href) : null;
 }
 
 export function reportEndpointHosts(headers, base) {

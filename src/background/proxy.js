@@ -8,10 +8,11 @@ export function createProxy({ proxy, privacy, extension }) {
     prediction: privacy.network.networkPredictionEnabled,
     webrtc: privacy.network.webRTCIPHandlingPolicy,
   };
+  // The settings are read at once: a check follows every commit and every change of any of them.
   const read = async (incognito) => {
-    const current = {};
-    for (const [name, setting] of Object.entries(settings)) current[name] = await setting.get({ incognito });
-    return current;
+    const names = Object.keys(settings);
+    const values = await Promise.all(names.map((name) => settings[name].get({ incognito })));
+    return Object.fromEntries(names.map((name, index) => [name, values[index]]));
   };
   const levelsOf = (current) => Object.fromEntries(Object.entries(current).map(([name, { levelOfControl }]) => [name, levelOfControl]));
   const holds = (current, data) => {
@@ -25,8 +26,8 @@ export function createProxy({ proxy, privacy, extension }) {
     );
   };
   const control = async (data = null) => {
-    const profiles = [await read(false)];
-    if (await extension.isAllowedIncognitoAccess()) profiles.push(await read(true));
+    const [regular, incognito] = await Promise.all([read(false), extension.isAllowedIncognitoAccess()]);
+    const profiles = incognito ? [regular, await read(true)] : [regular];
     const [levels, incognitoLevels = null] = profiles.map(levelsOf);
     return {
       levels,

@@ -16,23 +16,11 @@ export const CONFLICT = "conflict";
 export const UNOWNED = "unowned";
 
 const MAX_SITES = 100_000;
-const siteCache = new WeakMap();
 
 // The site of a name: its registrable domain; a public suffix, learned only as an exact record, is a site of its own.
-// Every build of the System PAC and the rules asks it for every learned host, so the answers are kept per list.
+// The list keeps its answers (core/psl.js).
 export function siteOf(name, psl) {
-  let cache = siteCache.get(psl);
-  if (cache === undefined) {
-    cache = new Map();
-    siteCache.set(psl, cache);
-  }
-  let site = cache.get(name);
-  if (site === undefined) {
-    if (cache.size >= MAX_SITES) cache.clear();
-    site = psl.registrableDomain(name) ?? name;
-    cache.set(name, site);
-  }
-  return site;
+  return psl.registrableDomain(name) ?? name;
 }
 
 const MAX_ROOT_LISTS = 8;

@@ -189,10 +189,12 @@ export function aggregatedRecords(before, after) {
   return merges;
 }
 
-export function aggregateGroups(groups, seen, analysis, psl) {
+// `masks` limits the pass to the groups that changed: a group aggregated once stays so until hosts are added to it, since
+// removing a record never gives a name a second branch, and a new deny, bypass or list aggregates every group anew.
+export function aggregateGroups(groups, seen, analysis, psl, masks = Object.keys(groups)) {
   let nextGroups = groups;
   let nextSeen = seen;
-  for (const mask of Object.keys(groups).sort()) {
+  for (const mask of [...masks].sort()) {
     const group = groups[mask];
     const { hosts, entries } = aggregateGroup(group, Object.hasOwn(seen, mask) ? seen[mask] : undefined, analysis, psl);
     if (hosts === group.hosts) continue;

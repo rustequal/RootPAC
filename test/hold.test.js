@@ -194,3 +194,20 @@ test("a narrowing of many records lists twenty routes in the log and counts the 
   assert.equal(held.count, 30);
   assert.equal(held.routes.length, 20);
 });
+
+test("a release that fails leaves the routes held and does not start another one; the next commit lets them go", async () => {
+  const { store, commands, browser, request, release, released, tick } = await setup();
+  tick(1100);
+  await commands.dispatch({ type: "removeHost", mask: "instagram.com", host: "cdn.example.net" });
+  const late = request("unrelated.org", 1099);
+  late(1101);
+  assert.equal(released(), 1);
+  // The release fails once; its rollback applies the previous state again.
+  browser.journal.failures.set("proxy.set", new Error("proxy refused"));
+  await assert.rejects(release(), /proxy refused/);
+  assert.equal(released(), 1, "a failed release does not trigger the next one at once");
+  assert.notEqual(store.state.held, null, "the routes stay held, through the proxy");
+  await commands.dispatch({ type: "setEnabled", enabled: true });
+  assert.equal(store.state.held, null, "the next commit lets the drained route go");
+  assert.equal(released(), 1);
+});

@@ -3,9 +3,11 @@ import { MAX_NAME, isDottedQuad, isHostName, trimTrailingDots, underLocalhost } 
 
 export { isHostName };
 
+// Every webRequest event asks it, so the URL is parsed once (URL.parse, not canParse and a constructor).
 export function hostFromUrl(url) {
-  if (typeof url !== "string" || !URL.canParse(url)) return null;
-  const host = trimTrailingDots(new URL(url).hostname.toLowerCase());
+  const parsed = typeof url === "string" ? URL.parse(url) : null;
+  if (parsed === null) return null;
+  const host = trimTrailingDots(parsed.hostname.toLowerCase());
   return host === "" ? null : host;
 }
 

@@ -42,3 +42,16 @@ test("rules are read up to whitespace, comments are skipped and IDN rules become
   assert.throws(() => parsePublicSuffixList("// nothing\n"), /no rules/);
   assert.throws(() => parsePublicSuffixList(null), /must be a string/);
 });
+
+test("names with empty labels have no suffix, and a repeated question is answered the same from memory", () => {
+  for (const name of ["", ".", "a..com", ".example.com", "example.com.", 5, null]) {
+    assert.equal(PSL.isPublicSuffix(name), false);
+    assert.equal(PSL.registrableDomain(name), null);
+  }
+  for (let round = 0; round < 2; round++) {
+    assert.equal(PSL.registrableDomain("a.b.bbc.co.uk"), "bbc.co.uk");
+    assert.equal(PSL.isPublicSuffix("co.uk"), true);
+    assert.equal(PSL.isPublicSuffix("bbc.co.uk"), false);
+    assert.equal(PSL.registrableDomain("co.uk"), null);
+  }
+});

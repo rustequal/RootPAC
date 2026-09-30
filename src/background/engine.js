@@ -28,11 +28,12 @@ export function createEngine({ store, proxy, dnr, session, traffic = NO_TRAFFIC,
     await session.set({ armed, openedAt });
   };
 
-  const settle = async (state) => {
+  // `own` are the state's routes without held ones, when the commit worked them out already.
+  const settle = async (state, own = null) => {
     const target = policyOf(state, store.psl);
     await install(intersectPolicies(effective, target));
     const control = configured(state) ? await proxy.apply(state.appliedPac) : await proxy.clear();
-    routes = configured(state) ? pacRoutes(state, store.psl) : [];
+    routes = !configured(state) ? [] : own === null ? pacRoutes(state, store.psl) : [...own, ...heldRoutes(state.held)];
     await install(control.armed ? target : closedPolicy(target));
     await arm(control.armed);
     return control;
@@ -41,10 +42,12 @@ export function createEngine({ store, proxy, dnr, session, traffic = NO_TRAFFIC,
   // A new PAC never drops a route a request may still be on its way to (4.11): the routes of the PAC in force that the
   // next one drops stay in it, held, until the requests to them are drained; the DNR rules narrow at once. With the
   // proxy off nothing goes through it to hold; in safe mode the PAC is not rebuilt, and keeps what it holds.
-  const withHeld = (next) => {
-    if (next.userPacErrors !== null || next.appliedPac === null) return next;
-    const held = configured(next) ? heldOf(droppedRoutes(routes, next, store.psl).filter((route) => !traffic.drained(route))) : null;
-    return sameHeld(held, next.held) ? next : { ...next, held, appliedPac: systemPacOf({ ...next, held }, store.psl) };
+  const withHeld = (proposed) => {
+    if (proposed.userPacErrors !== null || proposed.appliedPac === null) return { next: proposed, own: null };
+    const own = configured(proposed) ? pacRoutes({ ...proposed, held: null }, store.psl) : null;
+    const held = own === null ? null : heldOf(droppedRoutes(routes, proposed, store.psl, own).filter((route) => !traffic.drained(route)));
+    const next = sameHeld(held, proposed.held) ? proposed : { ...proposed, held, appliedPac: systemPacOf({ ...proposed, held }, store.psl) };
+    return { next, own };
   };
 
   // The held routes the traffic may release: only those a later commit can take out of the PAC.
@@ -121,20 +124,22 @@ export function createEngine({ store, proxy, dnr, session, traffic = NO_TRAFFIC,
     blockedBeforeOpen: (time) => armed !== true || time < openedAt,
     async commit(proposed) {
       const prev = store.state;
-      const next = withHeld(proposed);
+      const { next, own } = withHeld(proposed);
       const changes = log.on && !sameHeld(prev.held, next.held) ? heldChanges(prev.held, next) : [];
       await store.commit(next);
       try {
-        const control = await settle(next);
+        const control = await settle(next, own);
         for (const [kind, fields] of changes) log.add(kind, fields);
         traffic.hold(releasable(next), now());
         return control;
       } catch (error) {
         if (log.on) log.add("applyError", { message: error instanceof Error ? error.message : String(error) });
+        // The traffic still holds the routes of `prev`, which the rollback restores. It is not told again: that would
+        // start the next release at once, and a release that keeps failing would commit in a loop. A failed release
+        // leaves its routes held, through the proxy, until the next commit.
         await store
           .commit(prev)
           .then(() => settle(prev))
-          .then(() => traffic.hold(releasable(prev), now()))
           .catch(() => undefined);
         throw error;
       }

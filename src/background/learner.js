@@ -36,6 +36,7 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
   const pending = new Map();
   const observed = new Map();
   const seenThisSession = new Set();
+  let seenSaved = 0;
   let indexed = { groups: null, index: new Map(), own: new Map() };
   let running = false;
   let failed = false;
@@ -115,19 +116,22 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
 
   const writeTabs = async () => {
     writing = true;
-    while (dirty.size > 0) {
-      const items = {};
-      const removed = [];
-      for (const tabId of dirty) {
-        const tab = tabs.get(tabId);
-        if (tab === undefined) removed.push(TAB + tabId);
-        else items[TAB + tabId] = record(tab);
+    try {
+      while (dirty.size > 0) {
+        const items = {};
+        const removed = [];
+        for (const tabId of dirty) {
+          const tab = tabs.get(tabId);
+          if (tab === undefined) removed.push(TAB + tabId);
+          else items[TAB + tabId] = record(tab);
+        }
+        dirty.clear();
+        if (removed.length > 0) await session.remove(removed).catch(() => undefined);
+        if (Object.keys(items).length > 0) await persist(items);
       }
-      dirty.clear();
-      if (removed.length > 0) await session.remove(removed).catch(() => undefined);
-      if (Object.keys(items).length > 0) await persist(items);
+    } finally {
+      writing = false;
     }
-    writing = false;
   };
 
   const saveTab = (tabId) => {
@@ -218,7 +222,8 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
 
   const resetTab = (tabId, url) => {
     const previous = tabs.get(tabId);
-    const tab = { ...blankTab(hostFromUrl(url)), navigation: (previous?.navigation ?? 0) + 1, loading: true };
+    const host = hostFromUrl(url);
+    const tab = { ...blankTab(host), navigation: (previous?.navigation ?? 0) + 1, loading: rootOfHost(host, store.state.analysis?.roots ?? []) !== null };
     // The root document that answered before its page committed is the page's first loaded host.
     if (documents.get(tabId) === tab.host) {
       tab.loaded.add(tab.host);
@@ -256,9 +261,11 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
     for (const tabId of counted) changed(tabId);
   };
 
-  const startLoading = (tabId) => {
+  // Only a root tab shows whether its page is loading (6.4); another tab gets the flag with the commit of its next page,
+  // so an ordinary navigation writes its tab once, at the commit.
+  const startLoading = (tabId, roots) => {
     const tab = tabOf(tabId);
-    if (tab.loading) return;
+    if (tab.loading || rootOfHost(tab.host, roots) === null) return;
     tab.loading = true;
     changed(tabId);
   };
@@ -351,7 +358,7 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
     // A site nobody owns goes to the root that learned it first.
     const sites = claimSites(sitesOf(state), accepted.map((source) => [source.host, source.mask]), state.analysis.roots, store.psl);
     const merged = mergeGroups(state.groups, batch, time);
-    const { groups, seen: aggregatedSeen } = aggregateGroups(merged, nextSeen, state.analysis, store.psl);
+    const { groups, seen: aggregatedSeen } = aggregateGroups(merged, nextSeen, state.analysis, store.psl, new Set(accepted.map(({ mask }) => mask)));
     const learned = { ...state, groups, sites, seen: aggregatedSeen };
     const next = { ...learned, appliedPac: systemPacOf(learned, store.psl) };
     await engine.commit(next);
@@ -404,7 +411,11 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
           failed = false;
           session.remove(["lastLearnError"]).catch(() => undefined);
         }
-        persist({ seenThisSession: [...seenThisSession] });
+        // The pairs grow with the records a session uses: written again only when a batch added some.
+        if (seenThisSession.size !== seenSaved) {
+          seenSaved = seenThisSession.size;
+          persist({ seenThisSession: [...seenThisSession] });
+        }
       }
     } finally {
       running = false;
@@ -474,6 +485,7 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
     async restore() {
       const items = await session.get(null);
       for (const host of items.seenThisSession ?? []) seenThisSession.add(host);
+      seenSaved = seenThisSession.size;
       for (const [key, tab] of Object.entries(items)) {
         if (key.startsWith(TAB)) tabs.set(Number(key.slice(TAB.length)), { ...tab, loaded: new Set(tab.loaded), proxied: new Set(tab.proxied), conflicts: tab.conflicts ?? [] });
       }
@@ -491,7 +503,7 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
       const state = store.state;
       if (details.type === "main_frame") {
         if (details.tabId < 0) return;
-        startLoading(details.tabId);
+        startLoading(details.tabId, state.analysis?.roots ?? []);
         const host = hostFromUrl(details.url);
         const mask = learning(state) && host !== null ? rootOf(host, state.analysis.roots) : null;
         if (mask === null) return;
@@ -546,11 +558,11 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
       schedule();
     },
 
+    // Every response of the browser comes here; its headers are read only in a root's context.
     onHeaders(details) {
       if (IGNORED_LIFECYCLES.has(details.documentLifecycle)) return;
-      const hosts = reportEndpointHosts(details.responseHeaders ?? [], details.url);
       const state = store.state;
-      if (hosts.length === 0 || !learning(state)) return;
+      if (!learning(state)) return;
       const { roots } = state.analysis;
       let source;
       if (details.type === "main_frame") {
@@ -561,6 +573,8 @@ export function createLearner({ store, engine, session, tabs: browserTabs, now, 
         source = attribute(details, roots);
       }
       if (source === null) return;
+      const hosts = reportEndpointHosts(details.responseHeaders ?? [], details.url);
+      if (hosts.length === 0) return;
       const endpoint = { mask: source.mask, rootHost: source.rootHost, tabId: null, navigation: 0 };
       const added = hosts.filter((host) => enqueue(host, endpoint, state));
       if (added.length === 0) return;

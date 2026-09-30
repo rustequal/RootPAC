@@ -1,9 +1,9 @@
 {
   "name": "rootpac",
-  "version": "1.0.47",
+  "version": "1.0.48",
   "private": true,
   "license": "MIT",
   "type": "module",
-  "engines": { "node": ">=22" },
+  "engines": { "node": ">=22.1" },
   "scripts": { "test": "node --test \"test/*.test.js\"" }
 }

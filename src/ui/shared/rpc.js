@@ -69,4 +69,6 @@ export function download(name, text, type) {
   link.href = url;
   link.download = name;
   link.click();
+  // The page may stay open for long; the download has long taken the file when the URL is let go.
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }

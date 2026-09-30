@@ -9,6 +9,9 @@ const groupsBox = document.getElementById("groups");
 const filter = document.getElementById("filter");
 const errorBox = document.getElementById("error");
 
+// What the page shows: the System PAC, the User PAC it maps errors to, the groups and their routes.
+const VIEWED = new Set(["appliedPac", "userPac", "analysis", "proxies", "sites"]);
+
 let state = { appliedPac: "", groups: new Map(), seen: new Map(), routes: {} };
 const open = new Set();
 
@@ -188,8 +191,14 @@ function renderGroups() {
   groupsBox.replaceChildren(...(boxes.length === 0 ? [element("p", "muted", "No groups")] : boxes));
 }
 
+// Renders may overlap when one takes longer than the pause between storage writes; only the latest one is shown.
+let renders = 0;
+
 async function render() {
-  const [stored, routes] = await Promise.all([readLocal(null), send({ type: "getRoutes" }).catch(() => null)]);
+  const current = ++renders;
+  const keys = (await chrome.storage.local.getKeys()).filter((key) => VIEWED.has(key) || key.startsWith("group:") || key.startsWith("seen:"));
+  const [stored, routes] = await Promise.all([readLocal(keys), send({ type: "getRoutes" }).catch(() => null)]);
+  if (current !== renders) return;
   state = {
     routes: routes?.ok ? routes.roots : {},
     appliedPac: stored.appliedPac ?? "",
@@ -211,7 +220,6 @@ document.getElementById("copy").addEventListener("click", async () => {
 document.getElementById("download").addEventListener("click", () => download("rootpac.pac", state.appliedPac, "application/x-ns-proxy-autoconfig"));
 filter.addEventListener("input", renderGroups);
 let refresh = 0;
-const VIEWED = new Set(["appliedPac", "userPac", "analysis", "proxies", "sites"]);
 
 onStored((changes) => {
   if (!Object.keys(changes).some((key) => VIEWED.has(key) || key.startsWith("group:") || key.startsWith("seen:"))) return;

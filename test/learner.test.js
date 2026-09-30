@@ -275,6 +275,14 @@ test("hosts sharing a registrable domain are aggregated and covered subdomains a
   assert.deepEqual(browser.journal.entries, []);
   assert.deepEqual(area.items["seen:instagram.com"], { "googlevideo.com": 1002 });
   assert.deepEqual((await session.get("seenThisSession")).seenThisSession, ["instagram.com googlevideo.com"]);
+  // The pairs are written again only when a batch adds some: learning alone leaves them.
+  const pairWrites = () => session.writes().filter(([, keys]) => keys.includes("seenThisSession")).length;
+  const before = pairWrites();
+  request(learner, "https://static.cdn-z.net/a.js");
+  request(learner, "https://rr4---sn-d.googlevideo.com/v");
+  await settled(learner);
+  assert.ok(Object.hasOwn(learned(area).hosts, "static.cdn-z.net"));
+  assert.equal(pairWrites(), before);
 });
 
 const commit = (learner, tabId = TAB, url = "https://www.instagram.com/") =>
@@ -482,19 +490,43 @@ test("a tab counts as loading from the navigation until the page completes", asy
   const session = new FakeArea();
   const { learner } = await setup({ session });
   assert.equal(learner.loading(TAB), false);
+  // A tab that is not a root's shows no loading state: it gets the flag with the commit of a root page.
   learner.onRequest({ type: "main_frame", tabId: TAB, url: "https://www.instagram.com/", documentLifecycle: "active" });
-  assert.equal(learner.loading(TAB), true);
-  await settled(learner);
-  assert.equal((await storedTab(session, TAB)).loading, true);
+  assert.equal(learner.loading(TAB), false);
   commit(learner);
   assert.equal(learner.loading(TAB), true);
   learner.onCompleted(TAB, "https://old.example.com/");
   assert.equal(learner.loading(TAB), true);
   learner.onCompleted(TAB, "https://www.instagram.com/feed");
   assert.equal(learner.loading(TAB), false);
+  // A root tab loads again from its first main_frame request, before the commit.
+  learner.onRequest({ type: "main_frame", tabId: TAB, url: "https://www.instagram.com/", documentLifecycle: "active" });
+  assert.equal(learner.loading(TAB), true);
+  await settled(learner);
+  assert.equal((await storedTab(session, TAB)).loading, true);
   commit(learner);
   learner.onRemoved(TAB);
   assert.equal(learner.loading(TAB), false);
+});
+
+test("an ordinary navigation writes its tab once, at the commit", async () => {
+  const session = new FakeArea();
+  const { learner } = await setup({ session });
+  const other = TAB + 7;
+  learner.onCommitted({ tabId: other, frameId: 0, url: "https://example.org/", documentLifecycle: "active" });
+  await settled(learner);
+  const tabWrites = () => session.writes().filter(([, keys]) => keys.includes(`tab:${other}`)).length;
+  const before = tabWrites();
+  learner.onRequest({ type: "main_frame", tabId: other, url: "https://example.net/", documentLifecycle: "active" });
+  learner.onCompleted(other, "https://example.org/");
+  await settled(learner);
+  assert.equal(learner.loading(other), false);
+  learner.onCommitted({ tabId: other, frameId: 0, url: "https://example.net/", documentLifecycle: "active" });
+  learner.onCompleted(other, "https://example.net/");
+  await settled(learner);
+  assert.equal(learner.loading(other), false);
+  assert.equal((await storedTab(session, other)).host, "example.net");
+  assert.equal(tabWrites() - before, 1);
 });
 
 test("hosts routed through the proxy are counted apart, and only in root tabs", async () => {
