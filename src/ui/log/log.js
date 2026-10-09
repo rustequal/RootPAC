@@ -28,6 +28,9 @@ let texts = new Map();
 // newest event when the reader left page 1, so the events of a page stay put while new ones arrive.
 let page = 1;
 let anchor = null;
+// The rows on the page, by event id: a redraw reuses them, so new events cost only their own rows.
+let rows = new Map();
+let shownIds = "";
 
 const textOf = (entry) => {
   let text = texts.get(entry.id);
@@ -160,14 +163,19 @@ function renderEvents() {
   }
   const view = paginate(matched.length, page, PAGE_SIZE);
   page = view.page;
-  const table = element("table");
-  for (const entry of matched.slice(view.from, view.to)) {
-    const row = element("tr", `level-${entryLevel(entry)}`);
-    const text = element("td", "event", textOf(entry));
-    if (entry.url !== undefined && entry.url !== null) text.title = entry.url;
-    row.append(element("td", "muted time", formatTime(entry.time, { milliseconds: true })), text);
-    table.append(row);
+  const listed = matched.slice(view.from, view.to);
+  const next = new Map();
+  for (const entry of listed) {
+    let row = rows.get(entry.id);
+    if (row === undefined) {
+      row = element("tr", `level-${entryLevel(entry)}`);
+      const text = element("td", "event", textOf(entry));
+      if (entry.url !== undefined && entry.url !== null) text.title = entry.url;
+      row.append(element("td", "muted time", formatTime(entry.time, { milliseconds: true })), text);
+    }
+    next.set(entry.id, row);
   }
+  rows = next;
   const range = view.pages > 1 ? ` · page ${page} of ${view.pages}, ${(view.from + 1).toLocaleString()}–${view.to.toLocaleString()}` : "";
   summary.replaceChildren(`${plural(matched.length + fresh, "event")}${range} · ${entries.length.toLocaleString()} of the last ${LOG_LIMIT.toLocaleString()} kept`);
   if (fresh > 0) {
@@ -181,7 +189,17 @@ function renderEvents() {
     summary.append(" · ", link);
   }
   renderPager(view.pages);
-  eventsBox.replaceChildren(view.to === view.from ? element("p", "muted empty", "No events") : table);
+  // The same events on the page, as on another page while new ones arrive: the table stays as it is.
+  const ids = listed.length === 0 ? "" : `${category.value} ${needle} ${listed.length} ${listed[0].id} ${listed.at(-1).id}`;
+  if (ids === shownIds && eventsBox.firstChild !== null) return;
+  shownIds = ids;
+  if (listed.length === 0) {
+    eventsBox.replaceChildren(element("p", "muted empty", "No events"));
+    return;
+  }
+  const table = element("table");
+  table.append(...rows.values());
+  eventsBox.replaceChildren(table);
 }
 
 function render() {

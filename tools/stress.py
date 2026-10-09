@@ -142,7 +142,7 @@ def churn(worker, port, options, stop, stats, served, timings):
     return [every(options.psl_every, stop, update_list), every(options.pac_every, stop, save_user_pac), every(options.remove_every, stop, remove_site)]
 
 
-# The log keeps its last 5000 entries and the stand writes thousands (learning, pages): it is read as it grows.
+# The log keeps its last 20 000 entries and the stand writes thousands (learning, pages): it is read as it grows.
 READ_HELD_LOG = """after => new Promise((resolve, reject) => {
   const open = indexedDB.open("rootpac-log", 1);
   open.onerror = () => reject(open.error);

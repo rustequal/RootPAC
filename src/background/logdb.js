@@ -1,6 +1,10 @@
 import { LOG_LIMIT } from "./log.js";
 
 const NAME = "rootpac-log";
+// Old entries go once this many more are past the limit, not on every batch: a delete costs as much as the append it
+// follows (measured in Chromium), so the log holds up to LOG_LIMIT + PRUNE_STEP entries and the page shows the last
+// LOG_LIMIT.
+export const PRUNE_STEP = 1000;
 const STORE = "entries";
 
 const complete = (transaction) =>
@@ -12,8 +16,10 @@ const complete = (transaction) =>
 
 // The diagnostic log lives in IndexedDB: appends are cheap, it survives a browser restart and, unlike
 // chrome.storage, writing it does not wake every storage.onChanged listener of the extension.
-export function createLogDb({ factory = globalThis.indexedDB, keyRange = globalThis.IDBKeyRange, limit = LOG_LIMIT } = {}) {
+export function createLogDb({ factory = globalThis.indexedDB, keyRange = globalThis.IDBKeyRange, limit = LOG_LIMIT, step = PRUNE_STEP } = {}) {
   let opening = null;
+  // The id old entries were last deleted up to; a new worker deletes on its first append.
+  let pruned = -Infinity;
 
   const open = () => {
     opening ??= new Promise((resolve, reject) => {
@@ -52,7 +58,9 @@ export function createLogDb({ factory = globalThis.indexedDB, keyRange = globalT
         if (last === null) return;
         last.onsuccess = () => {
           const cutoff = last.result - limit;
-          if (cutoff > 0) store.delete(keyRange.upperBound(cutoff));
+          if (cutoff <= 0 || cutoff - pruned < step) return;
+          store.delete(keyRange.upperBound(cutoff));
+          pruned = cutoff;
         };
       }),
 

@@ -42,11 +42,16 @@ export function proxyErrorText(record, appliedPac, userPac) {
 const pad = (value) => String(value).padStart(2, "0");
 
 // Chrome's own date and time format (its UI language); extensions cannot read the regional format of the OS.
+const PLAIN = { year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "numeric", second: "numeric" };
 const WITH_MILLISECONDS = { year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit", fractionalSecondDigits: 3 };
 
+// One formatter each: `toLocaleString` builds a new one on every call, which the log pays for every row it draws.
+const formats = { plain: null, milliseconds: null };
+
 export function formatTime(time, { milliseconds = false } = {}) {
-  const date = new Date(time);
-  return milliseconds ? date.toLocaleString(undefined, WITH_MILLISECONDS) : date.toLocaleString();
+  if (milliseconds) formats.milliseconds ??= new Intl.DateTimeFormat(undefined, WITH_MILLISECONDS);
+  else formats.plain ??= new Intl.DateTimeFormat(undefined, PLAIN);
+  return (milliseconds ? formats.milliseconds : formats.plain).format(new Date(time));
 }
 
 export function timeZone(time = Date.now()) {
