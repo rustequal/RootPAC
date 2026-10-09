@@ -7,7 +7,7 @@ import { createLog, LOG_SETTING } from "../src/background/log.js";
 import { createCommands } from "../src/background/messages.js";
 import { createProxy } from "../src/background/proxy.js";
 import { Store } from "../src/background/store.js";
-import { CATEGORIES, entryLevel, entryText, failuresByHost } from "../src/ui/log/entries.js";
+import { CATEGORIES, entryLevel, entryText, failuresByHost, pageNumbers, paginate } from "../src/ui/log/entries.js";
 import { formatTime } from "../src/ui/shared/rpc.js";
 import { FakeArea, FakeBrowser } from "./fakes.js";
 import { fixture, vmChecker, PSL } from "./support.js";
@@ -188,4 +188,24 @@ test("held routes read as what the System PAC keeps and why it lets them go", ()
   assert.equal(entryText({ ...released, routes: [{ name: "x.net", root: "a.com", after: 40 }], count: 3, held: [{ name: "y.net", root: "a.com" }], heldCount: 25 }), "Routes released: x.net [a.com] after 40 ms and 2 more — the requests on their way finished, the System PAC is narrowed to the configuration; still held: y.net [a.com] and 24 more");
   assert.equal(entryLevel(held), "info");
   assert.ok(CATEGORIES.state.has("routesHeld") && CATEGORIES.state.has("routesReleased"));
+});
+
+test("the log is paged by 1000 events, a page out of range is the nearest one", () => {
+  assert.deepEqual(paginate(0, 1, 1000), { pages: 1, page: 1, from: 0, to: 0 });
+  assert.deepEqual(paginate(20000, 1, 1000), { pages: 20, page: 1, from: 0, to: 1000 });
+  assert.deepEqual(paginate(20000, 20, 1000), { pages: 20, page: 20, from: 19000, to: 20000 });
+  assert.deepEqual(paginate(2500, 3, 1000), { pages: 3, page: 3, from: 2000, to: 2500 });
+  assert.deepEqual(paginate(2500, 7, 1000), { pages: 3, page: 3, from: 2000, to: 2500 });
+  assert.deepEqual(paginate(2500, 0, 1000), { pages: 3, page: 1, from: 0, to: 1000 });
+});
+
+test("the pager shows the first, the last and the neighbours of the current page", () => {
+  assert.deepEqual(pageNumbers(1, 1), [1]);
+  assert.deepEqual(pageNumbers(3, 5), [1, 2, 3, 4, 5]);
+  assert.deepEqual(pageNumbers(1, 20), [1, 2, 3, null, 20]);
+  assert.deepEqual(pageNumbers(10, 20), [1, null, 8, 9, 10, 11, 12, null, 20]);
+  assert.deepEqual(pageNumbers(20, 20), [1, null, 18, 19, 20]);
+  // A gap of one page shows that page.
+  assert.deepEqual(pageNumbers(5, 20), [1, 2, 3, 4, 5, 6, 7, null, 20]);
+  assert.deepEqual(pageNumbers(16, 20), [1, null, 14, 15, 16, 17, 18, 19, 20]);
 });

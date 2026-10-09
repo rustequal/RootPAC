@@ -666,3 +666,88 @@ body.popup {
 .popup.tightest .stat {
   padding: 0;
 }
+
+/* Diagnostic log: proxy failures by host fold into one line; the events come in pages. */
+details.failures summary {
+  font-weight: 600;
+}
+
+details.failures summary::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  margin: 0 2px 0 1px;
+  border-right: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+  transform: rotate(-45deg);
+  transition: transform 0.12s;
+}
+
+details.failures[open] summary::before {
+  transform: rotate(45deg);
+}
+
+details.failures summary .muted {
+  font-weight: 400;
+}
+
+details.failures .note {
+  margin: 0;
+  padding: 10px 14px;
+  border-top: 1px solid var(--line);
+  font-size: 13.5px;
+}
+
+.pager-bar {
+  justify-content: space-between;
+  min-height: 34px;
+  margin: 8px 0;
+}
+
+.pager-bar > p {
+  margin: 0;
+}
+
+.pager-bar.bottom {
+  justify-content: flex-end;
+}
+
+.pager {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.pager button {
+  min-width: 32px;
+  font-variant-numeric: tabular-nums;
+}
+
+.pager button.current,
+.pager button.current:disabled {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  cursor: default;
+}
+
+.pager .gap {
+  padding: 0 4px;
+}
+
+.events {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.events tr:first-child td {
+  border-top: none;
+}
+
+.events .empty {
+  margin: 0;
+  padding: 10px 14px;
+}

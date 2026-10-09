@@ -1,5 +1,5 @@
 export const LOG_SETTING = "logEnabled";
-export const LOG_LIMIT = 5000;
+export const LOG_LIMIT = 20000;
 export const LOG_CHANNEL = "rootpac-log";
 
 const FLUSH_MS = 500;

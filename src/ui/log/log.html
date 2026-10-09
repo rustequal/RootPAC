@@ -5,8 +5,10 @@
 <body style="max-width: 1200px; margin: 0 auto">
 <div id="head"></div>
 <div id="banners" class="messages"></div>
-<h2 style="margin-top: 0">Proxy failures by host</h2>
-<div id="failures"></div>
+<details id="failures" class="failures">
+  <summary><span>Proxy failures by host</span><span id="failures-count" class="muted"></span></summary>
+  <div id="failures-body"></div>
+</details>
 <h2>Events</h2>
 <div class="row">
   <select id="category">
@@ -20,8 +22,12 @@
   <button id="export">Export</button>
   <button id="clear">Clear</button>
 </div>
-<p id="summary" class="muted"></p>
-<div id="events"></div>
+<div class="row pager-bar">
+  <p id="summary" class="muted"></p>
+  <nav id="pager-top" class="pager" aria-label="Pages of the log"></nav>
+</div>
+<div id="events" class="events"></div>
+<div class="row pager-bar bottom"><nav id="pager-bottom" class="pager" aria-label="Pages of the log"></nav></div>
 <p><a href="../options/options.html" target="_blank">Options</a></p>
 <script type="module" src="log.js"></script>
 </body>

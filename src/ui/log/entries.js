@@ -202,3 +202,23 @@ export function failuresByHost(entries) {
   }
   return [...hosts.values()].sort((a, b) => b.count - a.count || b.last - a.last);
 }
+
+// One page of `count` events, the newest first; a page out of range is the nearest one.
+export function paginate(count, page, size) {
+  const pages = Math.max(1, Math.ceil(count / size));
+  const current = Math.min(Math.max(1, page), pages);
+  return { pages, page: current, from: (current - 1) * size, to: Math.min(count, current * size) };
+}
+
+// The page numbers the pager shows: the first and the last, the current one with its neighbours, and a gap (null)
+// for each run left out; a gap of a single page shows that page instead.
+export function pageNumbers(page, pages, around = 2) {
+  const numbers = [];
+  for (let number = 1; number <= pages; number++) {
+    const shown = number === 1 || number === pages || Math.abs(number - page) <= around;
+    const lone = Math.abs(number - page) === around + 1 && (number === 2 || number === pages - 1);
+    if (shown || lone) numbers.push(number);
+    else if (numbers.at(-1) !== null) numbers.push(null);
+  }
+  return numbers;
+}
